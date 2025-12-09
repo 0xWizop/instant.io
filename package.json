@@ -1,0 +1,20 @@
+{
+  "name": "instantmerge-fun",
+  "version": "1.0.0",
+  "description": "InstantMerge.fun game engine - Agar.io style with instant merge mode",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "keywords": ["game", "io", "agar", "websocket"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.16.0",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {}
+}
+
