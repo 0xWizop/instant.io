@@ -11,9 +11,15 @@ export class Player {
     this.cursorY = 0;
     this.score = 0;
     this.config = config;
+    this.color = this.generateColor();
 
     // Spawn initial cell
     this.spawn(config);
+  }
+
+  generateColor() {
+    const hue = Math.floor(Math.random() * 360);
+    return `hsl(${hue}, 70%, 50%)`;
   }
 
   spawn(config) {
@@ -33,6 +39,13 @@ export class Player {
     cell.setInstantMerge(config.instantMerge);
 
     this.cells.push(cell);
+  }
+
+  setName(name) {
+    if (!name) return;
+    const trimmed = name.toString().trim().slice(0, 20);
+    if (trimmed.length === 0) return;
+    this.name = trimmed;
   }
 
   respawn(config) {
@@ -61,6 +74,12 @@ export class Player {
     const dist = Math.sqrt(dx * dx + dy * dy);
     const dirX = dist > 0 ? dx / dist : 0;
     const dirY = dist > 0 ? dy / dist : 0;
+
+    this.splitWithDirection(targetCount, dirX, dirY);
+  }
+
+  splitWithDirection(targetCount, dirX, dirY) {
+    if (this.cells.length >= targetCount) return;
 
     // Perform splits until we reach target count
     while (this.cells.length < targetCount) {
@@ -179,15 +198,36 @@ export class Player {
     const cursorDy = this.cursorY - centerY;
     const cursorDist = Math.sqrt(cursorDx * cursorDx + cursorDy * cursorDy);
     
-    // If cursor is far from center, prevent instant merge (allows "abuse")
-    // Calculate average cell radius to determine "far" threshold
+    // Cursor-based merge control logic:
+    // - Cursor centered (close to player center) = player wants quick merge = instant merge
+    // - Cursor away from center = player trying to hinder merge = delay merge
     let avgRadius = 0;
     if (this.cells.length > 0) {
-      const totalRadius = this.cells.reduce((sum, cell) => sum + cell.getRadius(), 0);
-      avgRadius = totalRadius / this.cells.length;
+      const radii = this.cells.map(cell => cell.getRadius());
+      avgRadius = radii.reduce((sum, r) => sum + r, 0) / radii.length;
     }
-    const mergePreventionDistance = avgRadius * 3; // Cursor must be 3x radius away to prevent merge
-    const shouldPreventMerge = cursorDist > mergePreventionDistance && config.instantMerge;
+    
+    // Determine merge delay based on cursor position:
+    // - Very close (within 1x avg radius): Cursor centered = quick merge (300ms)
+    // - Close (1x-2x avg radius): Medium delay (500ms) - cursor slightly away
+    // - Medium (2x-3.5x avg radius): Longer delay (800ms) - cursor away
+    // - Far (3.5x+ avg radius): Very long delay (1200ms) - cursor far away = actively hindering merge
+    const veryCloseThreshold = avgRadius * 1.0;   // Cursor centered
+    const closeThreshold = avgRadius * 2.0;         // Cursor slightly away
+    const mediumThreshold = avgRadius * 3.5;        // Cursor away
+    
+    let mergeDelayMs = 0;
+    if (config.instantMerge) {
+      if (cursorDist <= veryCloseThreshold) {
+        mergeDelayMs = 300;    // Cursor centered = quick merge (not instant)
+      } else if (cursorDist <= closeThreshold) {
+        mergeDelayMs = 500;   // Cursor slightly away = medium delay
+      } else if (cursorDist <= mediumThreshold) {
+        mergeDelayMs = 800;   // Cursor away = longer delay
+      } else {
+        mergeDelayMs = 1200;   // Cursor far away = very long delay (hindering merge)
+      }
+    }
 
     // Process merges - iterate over actual cells array
     for (let i = 0; i < this.cells.length; i++) {
@@ -204,15 +244,25 @@ export class Player {
 
         if (overlap > 0) {
           // Cells are overlapping
-          if (config.instantMerge && !shouldPreventMerge) {
-            // INSTANT MERGE - merge immediately with physics (unless cursor prevents it)
-            this.instantMergeCells(cell1, cell2);
-            j--; // Adjust index after removal
-          } else if (config.instantMerge && shouldPreventMerge) {
-            // Instant merge enabled but cursor is away - delay merge slightly
-            // This allows players to "abuse" by keeping cursor away
-            if (cell1.mergeTime && now - cell1.mergeTime >= 200) {
-              // Small delay (200ms) when cursor is away
+          
+          // Check if cursor is between/centered on the two merging cells
+          const cellMidX = (cell1.x + cell2.x) / 2;
+          const cellMidY = (cell1.y + cell2.y) / 2;
+          const cursorToMidDx = this.cursorX - cellMidX;
+          const cursorToMidDy = this.cursorY - cellMidY;
+          const cursorToMidDist = Math.sqrt(cursorToMidDx * cursorToMidDx + cursorToMidDy * cursorToMidDy);
+          const cellDist = dist;
+          
+          // If cursor is close to the midpoint between cells, merge very quickly
+          let actualMergeDelay = mergeDelayMs;
+          if (cursorToMidDist < cellDist * 0.5) {
+            // Cursor is between/centered on merging cells - merge quickly
+            actualMergeDelay = 100; // Very quick merge when cursor is on the cells
+          }
+          
+          if (config.instantMerge) {
+            // Instant merge mode with skill-based delays
+            if (cell1.mergeTime && now - cell1.mergeTime >= actualMergeDelay) {
               this.instantMergeCells(cell1, cell2);
               j--; // Adjust index after removal
             } else if (!cell1.mergeTime) {
@@ -309,7 +359,9 @@ export class Player {
       id: this.id,
       name: this.name,
       cells: this.cells.map((cell) => cell.serialize()),
-      score: this.score
+      score: this.score,
+      isBot: this.isBot || false,
+      color: this.color
     };
   }
 }

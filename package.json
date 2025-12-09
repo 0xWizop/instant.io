@@ -1,7 +1,7 @@
 {
-  "name": "instantmerge-fun",
+  "name": "instant-io",
   "version": "1.0.0",
-  "description": "InstantMerge.fun game engine - Agar.io style with instant merge mode",
+  "description": "instant.io game engine - Agar.io style with instant merge mode",
   "main": "server/index.js",
   "type": "module",
   "scripts": {

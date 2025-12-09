@@ -294,16 +294,40 @@ export class GameWorld {
       player.cells.forEach((cell) => {
         this.viruses.forEach((virus, virusId) => {
           if (this.isColliding(cell, virus)) {
-            if (cell.mass > this.config.virusMassThreshold) {
-              // Virus explodes player
-              player.split(16);
-              cell.mass *= 0.5; // Reduce mass
+            // Virus always splits the cell into many pieces, regardless of size
+            // First, gain mass from the virus
+            cell.mass += virus.mass;
+            
+            // Calculate split direction: use cell's velocity direction
+            const dx = cell.x - virus.x;
+            const dy = cell.y - virus.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const dirX = dist > 0 ? dx / dist : 0;
+            const dirY = dist > 0 ? dy / dist : 0;
+            
+            // Use cell's velocity direction (blended with away-from-virus direction)
+            const velLength = Math.sqrt(cell.vx * cell.vx + cell.vy * cell.vy);
+            let splitDirX, splitDirY;
+            if (velLength > 0.1) {
+              const velDirX = cell.vx / velLength;
+              const velDirY = cell.vy / velLength;
+              // Blend: 70% velocity, 30% away from virus
+              const blendX = velDirX * 0.7 + dirX * 0.3;
+              const blendY = velDirY * 0.7 + dirY * 0.3;
+              const blendLen = Math.sqrt(blendX * blendX + blendY * blendY);
+              splitDirX = blendX / blendLen;
+              splitDirY = blendY / blendLen;
             } else {
-              // Player eats virus
-              cell.mass += virus.mass;
-              this.viruses.delete(virusId);
-              this.createVirus(); // Respawn
+              splitDirX = dirX;
+              splitDirY = dirY;
             }
+            
+            // Split into many pieces (16 pieces)
+            player.splitWithDirection(16, splitDirX, splitDirY);
+            
+            // Remove and respawn virus
+            this.viruses.delete(virusId);
+            this.createVirus();
           }
         });
 
@@ -311,8 +335,23 @@ export class GameWorld {
         this.virusProjectiles.forEach((projectile, projectileId) => {
           if (this.isColliding(cell, projectile)) {
             if (cell.mass > this.config.virusMassThreshold) {
-              // Projectile explodes large cell
-              player.split(16);
+              // Projectile explodes large cell - use cell's velocity direction
+              const velLength = Math.sqrt(cell.vx * cell.vx + cell.vy * cell.vy);
+              if (velLength > 0.1) {
+                const dirX = cell.vx / velLength;
+                const dirY = cell.vy / velLength;
+                player.splitWithDirection(16, dirX, dirY);
+              } else {
+                // Use projectile direction (opposite of projectile velocity)
+                const projLength = Math.sqrt(projectile.vx * projectile.vx + projectile.vy * projectile.vy);
+                if (projLength > 0) {
+                  const dirX = -projectile.vx / projLength;
+                  const dirY = -projectile.vy / projLength;
+                  player.splitWithDirection(16, dirX, dirY);
+                } else {
+                  player.split(16);
+                }
+              }
               cell.mass *= 0.5;
             } else {
               // Small cell eats projectile
@@ -366,7 +405,8 @@ export class GameWorld {
   }
 
   massToRadius(mass) {
-    return Math.sqrt(mass / Math.PI) * 2;
+    // Match the cell radius calculation
+    return Math.sqrt(mass / Math.PI) * 3.5;
   }
 
   maintainWorld() {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>InstantMerge.fun</title>
+  <title>instant.io</title>
   <style>
     * {
       margin: 0;
@@ -114,7 +114,7 @@
     #settingsBtn {
       position: absolute;
       bottom: 20px;
-      right: 20px;
+      right: 240px;
       background: rgba(0, 0, 0, 0.7);
       padding: 10px 20px;
       border-radius: 5px;
@@ -132,7 +132,7 @@
     #themeToggle {
       position: absolute;
       bottom: 20px;
-      right: 200px;
+      right: 420px;
       background: rgba(0, 0, 0, 0.7);
       padding: 10px 20px;
       border-radius: 5px;
@@ -157,6 +157,158 @@
     body.light-mode #themeToggle:hover,
     body.light-mode #settingsBtn:hover {
       background: rgba(0, 255, 0, 0.3);
+    }
+
+    #minimap {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      width: 200px;
+      height: 200px;
+      border: 1px solid #6b7280;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.6);
+      pointer-events: none;
+    }
+
+    #homeScreen {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      z-index: 20;
+      transition: opacity 0.3s ease, visibility 0.3s ease;
+    }
+
+    #homeScreen.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    #homeContent {
+      background: rgba(13, 17, 23, 0.95);
+      border: 1px solid rgba(0, 255, 170, 0.15);
+      border-radius: 12px;
+      padding: 32px;
+      width: 90%;
+      max-width: 480px;
+      color: #e6f1ff;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    #homeContent h1 {
+      margin: 0 0 8px 0;
+      color: #00ff00;
+      font-size: 32px;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    #homeContent p {
+      margin: 0 0 24px 0;
+      color: #9fb3c8;
+      line-height: 1.5;
+      font-size: 14px;
+      text-align: center;
+    }
+
+    #homeForm {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    #playerName {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 255, 170, 0.3);
+      background: rgba(255, 255, 255, 0.05);
+      color: white;
+      font-size: 15px;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    #playerName:focus {
+      border-color: #00ff00;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    #playBtn {
+      padding: 14px 24px;
+      border: none;
+      border-radius: 8px;
+      background: #00ff00;
+      color: #0d1117;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 16px;
+      transition: all 0.2s ease;
+    }
+
+    #playBtn:hover {
+      background: #00cc00;
+      transform: translateY(-1px);
+    }
+
+    #playBtn:active {
+      transform: translateY(0);
+    }
+
+    #homeActions {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 12px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(0, 255, 170, 0.1);
+      color: #9fb3c8;
+      font-size: 13px;
+    }
+
+    #homeSettings {
+      color: #00ff00;
+      cursor: pointer;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    #homeSettings:hover {
+      color: #00ff00;
+    }
+
+    .homeStats {
+      display: flex;
+      justify-content: space-around;
+      margin: 20px 0;
+      padding: 16px;
+      background: rgba(0, 255, 170, 0.05);
+      border-radius: 8px;
+      border: 1px solid rgba(0, 255, 170, 0.1);
+    }
+
+    .homeStat {
+      text-align: center;
+    }
+
+    .homeStatValue {
+      display: block;
+      font-size: 20px;
+      font-weight: 600;
+      color: #00ff00;
+      margin-bottom: 4px;
+    }
+
+    .homeStatLabel {
+      font-size: 12px;
+      color: #9fb3c8;
     }
 
     #settingsModal {
@@ -278,6 +430,40 @@
     <div id="ping">Ping: <span id="pingValue">--</span>ms</div>
     <button id="themeToggle">🌙 Dark Mode</button>
     <button id="settingsBtn">Settings</button>
+    <canvas id="minimap"></canvas>
+  </div>
+
+  <div id="homeScreen" class="active">
+    <div id="homeContent">
+      <h1>instant.io</h1>
+      <p>Enter your nickname and join the arena. The game runs live in the background.</p>
+      
+      <div class="homeStats">
+        <div class="homeStat">
+          <span class="homeStatValue" id="homePlayers">0</span>
+          <span class="homeStatLabel">Players</span>
+        </div>
+        <div class="homeStat">
+          <span class="homeStatValue" id="homePing">--</span>
+          <span class="homeStatLabel">Ping</span>
+        </div>
+        <div class="homeStat">
+          <span class="homeStatValue" id="homeFPS">60</span>
+          <span class="homeStatLabel">FPS</span>
+        </div>
+      </div>
+
+      <div id="homeForm">
+        <input id="playerName" placeholder="Enter nickname" maxlength="20" />
+        <button id="playBtn">Play</button>
+      </div>
+      
+      <div id="homeActions">
+        <span id="homeSettings">Settings</span>
+        <span>•</span>
+        <span>Press ESC to pause</span>
+      </div>
+    </div>
   </div>
 
   <div id="settingsModal">

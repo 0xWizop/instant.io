@@ -65,6 +65,14 @@ export class GameServer {
       case 'action':
         this.world.handleAction(client.playerId, message.action);
         break;
+      case 'setName':
+        if (typeof message.name === 'string') {
+          const player = this.world.players.get(client.playerId);
+          if (player) {
+            player.setName(message.name);
+          }
+        }
+        break;
       case 'keybindUpdate':
         // Store keybinds client-side only, server doesn't need them
         break;
@@ -74,7 +82,7 @@ export class GameServer {
   }
 
   startGameLoop() {
-    const TPS = 60;
+    const TPS = 40; // Reduced from 60 to 40 for lower latency
     const tickInterval = 1000 / TPS;
     
     setInterval(() => {
@@ -85,14 +93,60 @@ export class GameServer {
 
   broadcastState() {
     const snapshot = this.world.getSnapshot();
-    const message = JSON.stringify({
+    
+    // Optimize snapshot size - only send essential data
+    const optimizedSnapshot = {
       type: 'snapshot',
-      ...snapshot
-    });
+      timestamp: snapshot.timestamp,
+      players: snapshot.players.map(p => ({
+        id: p.id,
+        name: p.name,
+        score: p.score,
+        cells: p.cells.map(c => ({
+          id: c.id,
+          x: Math.round(c.x * 10) / 10, // Round to 1 decimal
+          y: Math.round(c.y * 10) / 10,
+          mass: Math.round(c.mass),
+          ownerId: c.ownerId
+        }))
+      })),
+      pellets: snapshot.pellets.map(p => ({
+        id: p.id,
+        x: Math.round(p.x),
+        y: Math.round(p.y),
+        mass: p.mass,
+        color: p.color
+      })),
+      viruses: snapshot.viruses.map(v => ({
+        id: v.id,
+        x: Math.round(v.x),
+        y: Math.round(v.y),
+        mass: v.mass,
+        color: v.color
+      })),
+      feedPellets: snapshot.feedPellets.map(p => ({
+        id: p.id,
+        x: Math.round(p.x * 10) / 10,
+        y: Math.round(p.y * 10) / 10,
+        mass: Math.round(p.mass)
+      })),
+      virusProjectiles: snapshot.virusProjectiles.map(p => ({
+        id: p.id,
+        x: Math.round(p.x * 10) / 10,
+        y: Math.round(p.y * 10) / 10,
+        mass: Math.round(p.mass)
+      }))
+    };
+    
+    const message = JSON.stringify(optimizedSnapshot);
 
     this.clients.forEach((client) => {
       if (client.ws.readyState === 1) { // OPEN
         try {
+          // Use noDelay for lower latency
+          if (client.ws._socket) {
+            client.ws._socket.setNoDelay(true);
+          }
           client.ws.send(message);
         } catch (e) {
           console.error('Error sending to client:', e);

@@ -1,4 +1,4 @@
-# InstantMerge.fun Game Engine
+# instant.io Game Engine
 
 A complete .io game engine implementing core mechanics from Agar.io and Tricksplit.io, with a configurable **INSTANT MERGE** mode.
 

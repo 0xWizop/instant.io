@@ -28,7 +28,7 @@ export class GameClient {
     this.inputDirX = 0;
     this.inputDirY = 0;
     this.lastInputTime = 0;
-    this.inputRate = 1000 / 60; // 60Hz
+    this.inputRate = 1000 / 40; // 40Hz to match server TPS
 
     // Ping
     this.ping = 0;
@@ -39,6 +39,16 @@ export class GameClient {
     this.targetZoom = 1.0;
     this.minZoom = 0.5; // Can't zoom in too much
     this.maxZoom = 2.0; // Base max zoom (will be adjusted by cell size)
+    this.manualZoom = false; // Track if user manually zoomed
+
+    // Session
+    this.isPlaying = false;
+    this.playerName = null;
+
+    // Minimap
+    this.minimapCanvas = document.getElementById('minimap');
+    this.minimapCtx = this.minimapCanvas ? this.minimapCanvas.getContext('2d') : null;
+    this.resizeMinimap();
 
     // Theme
     this.isDarkMode = true;
@@ -182,6 +192,7 @@ export class GameClient {
     // Mouse wheel for zoom
     this.app.view.addEventListener('wheel', (e) => {
       e.preventDefault();
+      this.manualZoom = true; // User is manually zooming
       const zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
       this.targetZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.targetZoom + zoomDelta));
     });
@@ -232,7 +243,15 @@ export class GameClient {
       if (this.config) {
         this.drawBackground();
       }
+      this.resizeMinimap();
     });
+  }
+
+  resizeMinimap() {
+    if (!this.minimapCanvas) return;
+    const size = Math.min(200, Math.min(window.innerWidth, window.innerHeight) * 0.25);
+    this.minimapCanvas.width = size;
+    this.minimapCanvas.height = size;
   }
 
   connect() {
@@ -245,6 +264,9 @@ export class GameClient {
       console.log('Connected to server');
       this.startInputLoop();
       this.startPingLoop();
+      if (this.playerName) {
+        this.sendName(this.playerName);
+      }
     };
 
     this.ws.onmessage = (event) => {
@@ -272,6 +294,9 @@ export class GameClient {
         this.playerId = message.playerId;
         this.config = message.config;
         this.drawBackground(); // Redraw background with correct map size
+        if (this.playerName) {
+          this.sendName(this.playerName);
+        }
         break;
       case 'snapshot':
         this.handleSnapshot(message);
@@ -291,6 +316,24 @@ export class GameClient {
 
     // Update game entities
     this.updateEntities(snapshot);
+  }
+
+  setPlayerName(name) {
+    if (!name) return;
+    this.playerName = name;
+    this.sendName(name);
+  }
+
+  setPlaying(isPlaying) {
+    this.isPlaying = isPlaying;
+  }
+
+  sendName(name) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({
+      type: 'setName',
+      name
+    }));
   }
 
   updateEntities(snapshot) {
@@ -350,7 +393,7 @@ export class GameClient {
     const container = new PIXI.Container();
     const isLocal = playerData.id === this.playerId;
     playerData.cells.forEach((cellData) => {
-      const cell = this.createCellGraphics(cellData, isLocal, playerData.name);
+      const cell = this.createCellGraphics(cellData, isLocal, playerData.name, playerData.color);
       container.addChild(cell);
     });
     this.gameLayer.addChild(container);
@@ -371,10 +414,10 @@ export class GameClient {
       if (index < existingCells.length) {
         cellGraphics = existingCells[index];
       } else {
-        cellGraphics = this.createCellGraphics(cellData, isLocal, playerData.name);
+        cellGraphics = this.createCellGraphics(cellData, isLocal, playerData.name, playerData.color);
         player.container.addChild(cellGraphics);
       }
-      this.updateCellGraphics(cellGraphics, cellData, isLocal, playerData.name);
+      this.updateCellGraphics(cellGraphics, cellData, isLocal, playerData.name, playerData.color);
     });
 
     // Remove extra cells
@@ -391,30 +434,114 @@ export class GameClient {
     }
   }
 
-  createCellGraphics(cellData, isLocal, playerName) {
+  createCellGraphics(cellData, isLocal, playerName, playerColor) {
     const radius = this.massToRadius(cellData.mass);
+    const container = new PIXI.Container();
+    
+    // Create graphics for the cell circle
     const graphics = new PIXI.Graphics();
     graphics.cellData = cellData;
     graphics.isLocal = isLocal;
     graphics.playerName = playerName;
     
-    this.drawCell(graphics, cellData, radius, isLocal, playerName);
-    return graphics;
+    container.addChild(graphics);
+    
+    // Create text for player name (crisp rendering, properly centered)
+    const nameText = new PIXI.Text(playerName || 'Player', {
+      fontFamily: 'Arial',
+      fontSize: Math.max(14, Math.min(28, radius * 0.35)),
+      fill: 0xffffff,
+      align: 'center',
+      stroke: 0x000000,
+      strokeThickness: 3,
+      fontWeight: 'bold',
+      resolution: window.devicePixelRatio || 1, // High DPI support
+      roundPixels: true // Prevent blurry text
+    });
+    nameText.anchor.set(0.5, 0.5); // Center anchor
+    nameText.x = 0;
+    nameText.y = Math.round(-radius * 0.12); // Position name slightly above center with better spacing
+    container.nameText = nameText;
+    container.addChild(nameText);
+    
+    // Create text for cell mass (below name, crisp rendering, properly centered)
+    const massText = new PIXI.Text(Math.floor(cellData.mass).toString(), {
+      fontFamily: 'Arial',
+      fontSize: Math.max(11, Math.min(20, radius * 0.28)),
+      fill: 0xffffff,
+      align: 'center',
+      stroke: 0x000000,
+      strokeThickness: 2,
+      fontWeight: 'normal',
+      resolution: window.devicePixelRatio || 1, // High DPI support
+      roundPixels: true // Prevent blurry text
+    });
+    massText.anchor.set(0.5, 0.5); // Center anchor
+    massText.x = 0;
+    massText.y = Math.round(radius * 0.12); // Position mass below name with proper spacing
+    container.massText = massText;
+    container.addChild(massText);
+    
+    this.drawCell(graphics, cellData, radius, isLocal, playerName, playerColor);
+    return container;
   }
 
-  updateCellGraphics(graphics, cellData, isLocal, playerName) {
+  updateCellGraphics(container, cellData, isLocal, playerName, playerColor) {
+    const graphics = container.children[0]; // Graphics is first child
+    const nameText = container.nameText;
+    const massText = container.massText;
+    
     graphics.cellData = cellData;
     graphics.playerName = playerName;
     const radius = this.massToRadius(cellData.mass);
     graphics.clear();
-    this.drawCell(graphics, cellData, radius, isLocal, playerName);
+    this.drawCell(graphics, cellData, radius, isLocal, playerName, playerColor);
+    
+    // Update name text
+    if (nameText) {
+      nameText.text = playerName || 'Player';
+      nameText.style.fontSize = Math.max(14, Math.min(28, radius * 0.35));
+      nameText.y = Math.round(-radius * 0.12); // Better spacing, rounded for crisp rendering
+      nameText.x = 0; // Ensure perfectly centered
+      nameText.anchor.set(0.5, 0.5); // Ensure center anchor
+      // Only show text if cell is large enough
+      nameText.visible = radius > 20;
+    }
+    
+    // Update mass text
+    if (massText) {
+      massText.text = Math.floor(cellData.mass).toString();
+      massText.style.fontSize = Math.max(11, Math.min(20, radius * 0.28));
+      massText.y = Math.round(radius * 0.12); // Better spacing, rounded for crisp rendering
+      massText.x = 0; // Ensure perfectly centered
+      massText.anchor.set(0.5, 0.5); // Ensure center anchor
+      // Only show mass if cell is large enough
+      massText.visible = radius > 20;
+    }
   }
 
-  drawCell(graphics, cellData, radius, isLocal, playerName) {
+  drawCell(graphics, cellData, radius, isLocal, playerName, playerColor) {
     const isBot = playerName && playerName.startsWith('Bot');
     
+    // Use player's color if available, otherwise fallback to defaults
     let color, borderColor;
-    if (isLocal) {
+    if (playerColor) {
+      color = this.hexToNumber(playerColor);
+      // Calculate darker border color by reducing lightness
+      if (playerColor.startsWith('hsl')) {
+        const match = playerColor.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);
+        if (match) {
+          const h = parseInt(match[1]);
+          const s = parseInt(match[2]);
+          const l = Math.max(20, parseInt(match[3]) - 20); // Darker
+          borderColor = this.hslToHex(h / 360, s / 100, l / 100);
+        } else {
+          borderColor = color * 0.6; // Fallback: darker version
+        }
+      } else {
+        borderColor = color * 0.6; // Fallback: darker version
+      }
+    } else if (isLocal) {
       color = 0x00ff00; // Green for local player
       borderColor = 0x00ffff; // Cyan border
     } else if (isBot) {
@@ -588,7 +715,8 @@ export class GameClient {
   }
 
   massToRadius(mass) {
-    return Math.sqrt(mass / Math.PI) * 2;
+    // Match server radius calculation
+    return Math.sqrt(mass / Math.PI) * 3.5;
   }
 
   hexToNumber(hex) {
@@ -638,6 +766,7 @@ export class GameClient {
   sendInput() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.playerId) return;
+    if (!this.isPlaying) return;
 
     // Calculate direction to mouse
     const localPlayer = this.players.get(this.playerId);
@@ -680,11 +809,13 @@ export class GameClient {
           cursorY: worldCursorY
         }
       }));
+    }
   }
 
   sendAction(actionType) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.playerId) return;
+    if (!this.isPlaying) return;
 
     this.ws.send(JSON.stringify({
       type: 'action',
@@ -714,17 +845,29 @@ export class GameClient {
       // Calculate zoom based on largest cell size
       const largestCell = localPlayer.data.cells.reduce((largest, cell) => 
         cell.mass > largest.mass ? cell : largest, localPlayer.data.cells[0]);
-      const cellRadius = Math.sqrt(largestCell.mass / Math.PI) * 2;
+      const cellRadius = Math.sqrt(largestCell.mass / Math.PI) * 3.5; // Match server radius calculation
       
-      // Dynamic max zoom: larger cells can zoom out more, but with caps
-      // Base viewport is ~800px, so we want to see at least 2x the cell radius
-      const baseViewport = Math.min(this.app.screen.width, this.app.screen.height);
-      const minVisibleRadius = baseViewport / 4; // Want to see at least 4x cell radius
-      const maxZoomBySize = Math.min(3.0, Math.max(1.0, minVisibleRadius / cellRadius));
-      this.maxZoom = Math.min(2.5, maxZoomBySize); // Cap at 2.5x to prevent seeing too much
+      // Dynamic zoom: ensure cell looks good on screen (only if user hasn't manually zoomed)
+      if (!this.manualZoom) {
+        // For 1500 mass (radius ~122px), we want good visibility
+        const baseViewport = Math.min(this.app.screen.width, this.app.screen.height);
+        // Want to see about 3-4x the cell radius for good visibility
+        const desiredVisibleRadius = cellRadius * 3.5;
+        const idealZoom = baseViewport / (desiredVisibleRadius * 2);
+        
+        // Set target zoom to ensure cell is clearly visible
+        this.targetZoom = Math.max(0.8, Math.min(2.0, idealZoom));
+        this.maxZoom = Math.min(2.5, idealZoom * 1.2); // Allow some zoom out
+      } else {
+        // User has manually zoomed, update maxZoom based on cell size but don't override targetZoom
+        const baseViewport = Math.min(this.app.screen.width, this.app.screen.height);
+        const desiredVisibleRadius = cellRadius * 3.5;
+        const idealZoom = baseViewport / (desiredVisibleRadius * 2);
+        this.maxZoom = Math.min(2.5, idealZoom * 1.2); // Update maxZoom for bounds
+      }
 
       // Smooth zoom interpolation
-      const zoomSpeed = 0.1;
+      const zoomSpeed = 0.12;
       this.zoom += (this.targetZoom - this.zoom) * zoomSpeed;
 
       // Apply camera offset with zoom
@@ -747,9 +890,85 @@ export class GameClient {
     this.renderViruses();
     this.renderFeedPellets();
     this.renderVirusProjectiles();
+    this.renderMinimap();
 
     // Update leaderboard
     this.updateLeaderboard();
+  }
+
+  renderMinimap() {
+    if (!this.minimapCtx || !this.config || !this.serverState) return;
+
+    const ctx = this.minimapCtx;
+    const size = this.minimapCanvas.width;
+    const mapWidth = this.config.mapWidth || 5000;
+    const mapHeight = this.config.mapHeight || 5000;
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.fillStyle = this.isDarkMode ? '#0d1117' : '#f5f5f5';
+    ctx.fillRect(0, 0, size, size);
+    
+    // Draw grid (5x5)
+    const gridCols = 5;
+    const gridRows = 5;
+    const cellWidth = size / gridCols;
+    const cellHeight = size / gridRows;
+    
+    ctx.strokeStyle = this.isDarkMode ? '#2e3748' : '#9a9a9a';
+    ctx.lineWidth = 1;
+    
+    // Vertical grid lines
+    for (let i = 1; i < gridCols; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * cellWidth, 0);
+      ctx.lineTo(i * cellWidth, size);
+      ctx.stroke();
+    }
+    
+    // Horizontal grid lines
+    for (let i = 1; i < gridRows; i++) {
+      ctx.beginPath();
+      ctx.moveTo(0, i * cellHeight);
+      ctx.lineTo(size, i * cellHeight);
+      ctx.stroke();
+    }
+    
+    // Draw grid labels in each square (A1, A2, etc.)
+    ctx.font = 'bold 9px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = this.isDarkMode ? '#6b7280' : '#666666';
+    
+    const letters = ['A', 'B', 'C', 'D', 'E'];
+    for (let col = 0; col < gridCols; col++) {
+      for (let row = 0; row < gridRows; row++) {
+        const label = letters[col] + (row + 1);
+        const x = (col + 0.5) * cellWidth;
+        const y = (row + 0.5) * cellHeight;
+        ctx.fillText(label, x, y);
+      }
+    }
+    
+    // No border - removed green border
+
+    // Draw players ONLY - NO BOTS on minimap (minimap is for you and your team/party)
+    const players = (this.serverState.players || []).filter(p => !p.isBot);
+    players.forEach((player) => {
+      const isLocal = player.id === this.playerId;
+      player.cells.forEach((cell) => {
+        const x = (cell.x / mapWidth) * size;
+        const y = (cell.y / mapHeight) * size;
+        const r = Math.max(2, Math.min(6, Math.sqrt(cell.mass / Math.PI) * size / (mapWidth * 0.7)));
+
+        ctx.beginPath();
+        ctx.globalAlpha = isLocal ? 0.95 : 0.65;
+        ctx.fillStyle = isLocal ? '#00ff00' : '#00aaff';
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    });
+
+    ctx.globalAlpha = 1;
   }
 
   renderPlayers() {
