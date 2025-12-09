@@ -101,11 +101,9 @@ export class Bot extends Player {
   }
 
   makeDecisions(world) {
-    // Split if we have few cells and see a target
-    if (this.cells.length < 4 && Math.random() < 0.01) {
-      const targetCount = 2 + Math.floor(Math.random() * 3); // 2-4 cells
-      this.split(targetCount);
-    }
+    // Bots should NOT split on their own - only split when hitting viruses
+    // (Virus splits are handled in GameWorld.js collision detection)
+    // Removed auto-split logic for bots
 
     // Feed if we're large enough
     if (this.getTotalMass() > 2000 && Math.random() < 0.005) {

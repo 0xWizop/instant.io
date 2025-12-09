@@ -21,11 +21,12 @@ export class Cell {
   }
 
   updateMovement(inputDirX, inputDirY, config) {
-    // Turn without losing speed: blend toward a mass-scaled target velocity
+    // Silky smooth movement: blend toward a mass-scaled target velocity
     const BASE_SPEED = 18.0;      // Much higher base speed for faster movement
-    const MASS_FACTOR = 0.003;    // Mass scaling factor (bigger = slower)
-    const TURN_RESPONSE = 0.4;    // Faster response for snappier turning
-    const FRICTION = 0.97;        // Slow down only when no input
+    const MASS_FACTOR = 0.0012;   // Mass scaling factor (bigger = slower) - increased to reduce small cell speed
+    const TURN_RESPONSE = 0.15;   // Lower response for smoother, more gradual turning (was 0.4)
+    const ACCELERATION = 0.85;    // Higher acceleration for smoother speed changes
+    const FRICTION = 0.985;       // Very low friction for smoother deceleration
     const SPLIT_DAMPING = 0.92;   // Extra damping after split if not moving in split direction
     const SPLIT_DAMPING_TIME = 500; // Apply extra damping for 500ms after split
 
@@ -48,13 +49,25 @@ export class Cell {
       }
 
       // Speed formula: larger mass = slower speed
-      const targetSpeed = BASE_SPEED / (1 + this.mass * MASS_FACTOR);
+      // Add cap to prevent very small cells from being too fast
+      const rawSpeed = BASE_SPEED / (1 + this.mass * MASS_FACTOR);
+      // Cap maximum speed for very small cells (after virus splits) - they should be faster but not too fast
+      const MAX_SPEED = 24.0; // Maximum speed cap (reduced from unlimited)
+      const targetSpeed = Math.min(rawSpeed, MAX_SPEED);
       const targetVx = dirX * targetSpeed;
       const targetVy = dirY * targetSpeed;
 
-      // Blend toward target velocity so turning keeps momentum
-      this.vx = this.vx * (1 - TURN_RESPONSE) + targetVx * TURN_RESPONSE;
-      this.vy = this.vy * (1 - TURN_RESPONSE) + targetVy * TURN_RESPONSE;
+      // Smooth acceleration: blend velocity more gradually for silky smooth movement
+      // Use exponential smoothing for buttery smooth transitions
+      const currentSpeed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+      const speedDiff = Math.abs(targetSpeed - currentSpeed);
+      
+      // Adaptive response: faster response when far from target, slower when close
+      const adaptiveResponse = Math.min(TURN_RESPONSE + (speedDiff / targetSpeed) * 0.1, ACCELERATION);
+      
+      // Blend toward target velocity with adaptive response
+      this.vx = this.vx * (1 - adaptiveResponse) + targetVx * adaptiveResponse;
+      this.vy = this.vy * (1 - adaptiveResponse) + targetVy * adaptiveResponse;
       
       // If recently split and not moving in split direction, dampen split velocity quickly
       if (shouldDampenSplit) {
@@ -74,8 +87,11 @@ export class Cell {
     this.y += this.vy;
 
     // Apply mass decay (only if mass is above minimum threshold)
+    // Larger cells decay faster to balance pellet consumption
     if (config.massDecayRate > 0 && this.mass > 50) {
-      const decayAmount = this.mass * config.massDecayRate;
+      // Base decay rate scales with mass - larger cells decay faster
+      const massMultiplier = 1 + (this.mass / 2000); // 2x decay at 2000 mass, 3x at 4000, etc.
+      const decayAmount = this.mass * config.massDecayRate * massMultiplier;
       this.mass = Math.max(50, this.mass - decayAmount); // Minimum mass of 50
     }
 
@@ -86,30 +102,40 @@ export class Cell {
   }
 
   getRadius() {
-    // Increased multiplier to make cells appear larger on screen
-    // 1500 mass should look substantial and clearly visible
-    return Math.sqrt(this.mass / Math.PI) * 3.5;
+    // Faster scaling: cells grow larger more quickly as mass increases
+    // Using a power curve for faster scaling at higher masses
+    const baseRadius = Math.sqrt(this.mass / Math.PI);
+    // Scale factor increases with mass for faster growth
+    const scaleFactor = 3.5 + Math.min(this.mass / 5000, 2.0); // Up to 5.5x for very large cells
+    return baseRadius * scaleFactor;
   }
 
   canSplit() {
+    // If cooldown is 0 (instant merge), always allow split
+    if (this.splitCooldown === 0) return true;
+    // Otherwise check if cooldown has passed
     return Date.now() - this.lastSplitTime > this.splitCooldown;
   }
 
-  split(targetCount, dirX, dirY) {
+  split(targetCount, dirX, dirY, impulseMultiplier = 1.0) {
     // Allow split if cooldown is passed OR if instant merge is enabled (cooldown = 0)
-    if (!this.canSplit() && this.splitCooldown > 0) return null;
+    if (this.splitCooldown > 0 && !this.canSplit()) return null;
     if (this.mass < 100) return null;
 
     const currentTime = Date.now();
     this.lastSplitTime = currentTime;
 
-    const newMass = this.mass / 2;
+    // Calculate masses - ensure we don't go below minimum
     const oldMass = this.mass;
-    this.mass = newMass;
+    const newMass = Math.max(50, oldMass / 2); // Ensure minimum mass of 50
+    const remainingMass = oldMass - newMass;
+    
+    // Update original cell mass
+    this.mass = remainingMass;
 
-    // Calculate radii
+    // Calculate radii using the dynamic scaling function
     const oldRadius = this.getRadius();
-    const newRadius = Math.sqrt(newMass / Math.PI) * 2;
+    // Calculate new radius after mass change (will be recalculated with getRadius() on new cell)
 
     // Determine split direction: prioritize cursor direction (where player is aiming)
     let splitDirX = 0;
@@ -150,27 +176,48 @@ export class Cell {
     }
 
     // Split: new cell ejects FROM original cell TOWARD cursor location
-    const baseImpulseSpeed = 6.5; // Impulse speed for ejection
-    const massFactor = Math.min(oldMass * 0.002, 3);
-    const impulseSpeed = baseImpulseSpeed + massFactor;
+    // Base impulse speed - stronger for normal splits, reduced for virus splits
+    // Impulse should scale with cell size for proper separation
+    const baseImpulseSpeed = 8.5; // Increased base impulse speed for better separation
+    const sizeFactor = Math.min(oldRadius * 0.1, 5.0); // Scale with radius (larger cells = more impulse, increased)
+    const massFactor = Math.min(oldMass * 0.0012, 2.5); // Slightly increased mass factor
+    let impulseSpeed = (baseImpulseSpeed + sizeFactor + massFactor) * impulseMultiplier;
+    
+    // Reduce impulse for very small cells (after virus splits only)
+    if (impulseMultiplier < 0.8 && newMass < 500) {
+      impulseSpeed *= 0.5; // Half impulse for very small cells from virus splits
+    } else if (impulseMultiplier < 0.8 && newMass < 1000) {
+      impulseSpeed *= 0.7; // 70% impulse for small cells from virus splits
+    }
 
-    // New cell starts slightly offset from original cell center (in split direction)
-    // This makes it visually eject FROM the original cell
-    const ejectionOffset = oldRadius * 0.2; // Start 20% of radius away from center
+    // New cell starts with proper spacing from original cell center (in split direction)
+    // Spacing should be relative to cell size and split type:
+    // - Normal splits (attack): Much more distance (120% of radius) for long eject with clear space
+    // - Virus/burst splits (defensive): More distance (40% of radius) to prevent overlap
+    const isAttackSplit = impulseMultiplier >= 0.9; // Normal splits are attacks
+    const spacingFactor = isAttackSplit ? 1.2 : 0.4; // 120% for attacks (long eject with space), 40% for defensive
+    const ejectionOffset = oldRadius * spacingFactor;
     const newCellX = this.x + splitDirX * ejectionOffset;
     const newCellY = this.y + splitDirY * ejectionOffset;
 
     // Create new cell that will travel FROM original cell TOWARD cursor
+    // Generate unique ID using timestamp and random
+    const newCellId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
     const newCell = new Cell(
-      Date.now() + Math.random(),
+      newCellId,
       newCellX,
       newCellY,
       newMass,
       this.ownerId
     );
+    
+    // Ensure new cell has instant merge settings
+    newCell.setInstantMerge(this.splitCooldown === 0);
 
-    // Original cell gets small backward push (minimal)
-    const backwardImpulse = impulseSpeed * 0.3; // Small backward push
+    // Original cell gets backward push (opposite of split direction)
+    // More push for attack splits to create clear space between cells
+    const backwardMultiplier = isAttackSplit ? 0.85 : 0.4; // More separation for attacks (clear space)
+    const backwardImpulse = impulseSpeed * backwardMultiplier;
     this.vx -= splitDirX * backwardImpulse;
     this.vy -= splitDirY * backwardImpulse;
     
@@ -179,10 +226,14 @@ export class Cell {
     this.splitDirectionY = -splitDirY;
     this.splitTime = currentTime;
 
-    // New cell ejects FROM original cell TOWARD cursor with strong forward velocity
-    const forwardImpulse = impulseSpeed * 1.2; // Strong forward impulse toward cursor
-    newCell.vx = this.vx + splitDirX * forwardImpulse; // Eject toward cursor
-    newCell.vy = this.vy + splitDirY * forwardImpulse; // Eject toward cursor
+    // New cell ejects FROM original cell TOWARD cursor with smooth, long forward velocity
+    // Attack splits need much more distance for long eject with clear space
+    const forwardMultiplier = isAttackSplit ? 4.2 : 1.8; // Much more distance for attacks (long eject with space), more for defensive
+    const forwardImpulse = impulseSpeed * forwardMultiplier;
+    // New cell gets strong impulse in split direction (toward cursor), independent of original cell velocity
+    // This ensures it always ejects AWAY from the original cell
+    newCell.vx = splitDirX * forwardImpulse; // Pure impulse toward cursor (away from original cell)
+    newCell.vy = splitDirY * forwardImpulse; // Pure impulse toward cursor (away from original cell)
     newCell.lastSplitTime = currentTime;
     newCell.splitDirectionX = splitDirX; // Track split direction (toward cursor)
     newCell.splitDirectionY = splitDirY;

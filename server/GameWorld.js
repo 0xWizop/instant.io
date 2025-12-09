@@ -12,7 +12,7 @@ export class GameWorld {
       virusMassThreshold: 2000,
       virusMaxMass: 2000,
       autoSplitMass: 22500,
-      massDecayRate: 0.00005, // Much slower decay (0.005% per tick = 0.3% per second)
+      massDecayRate: 0.0001, // Base decay rate (0.01% per tick, scales with mass)
       mapWidth: 5000,
       mapHeight: 5000,
       pelletCount: 1000,
@@ -71,11 +71,33 @@ export class GameWorld {
 
   createPellet() {
     const pelletId = this.nextId++;
-    const pellet = new Pellet(
-      pelletId,
-      Math.random() * this.config.mapWidth,
-      Math.random() * this.config.mapHeight
-    );
+    let attempts = 0;
+    let x, y;
+    let validPosition = false;
+    
+    // Try to find a position that doesn't overlap with viruses
+    while (!validPosition && attempts < 50) {
+      x = Math.random() * this.config.mapWidth;
+      y = Math.random() * this.config.mapHeight;
+      validPosition = true;
+      
+      // Check collision with all viruses
+      for (const virus of this.viruses.values()) {
+        const dx = x - virus.x;
+        const dy = y - virus.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const virusRadius = this.massToRadius(virus.mass);
+        const pelletRadius = this.massToRadius(15); // Pellet mass is typically 15
+        if (dist < virusRadius + pelletRadius + 10) { // 10px buffer
+          validPosition = false;
+          break;
+        }
+      }
+      attempts++;
+    }
+    
+    // If we couldn't find a valid position after 50 attempts, just spawn anyway
+    const pellet = new Pellet(pelletId, x, y);
     this.pellets.set(pelletId, pellet);
     return pelletId;
   }
@@ -243,10 +265,23 @@ export class GameWorld {
   }
 
   checkCollisions() {
-    // Player vs Pellets
+    // Player vs Pellets (optimized with early distance check)
     this.players.forEach((player) => {
       player.cells.forEach((cell) => {
+        const cellRadius = cell.getRadius();
+        const cellX = cell.x;
+        const cellY = cell.y;
+        
+        // Only check pellets within reasonable distance (optimization)
         this.pellets.forEach((pellet, pelletId) => {
+          const dx = cellX - pellet.x;
+          const dy = cellY - pellet.y;
+          const distSq = dx * dx + dy * dy;
+          const maxDist = cellRadius + 20; // Pellet radius is small, add buffer
+          
+          // Early exit: skip if too far away
+          if (distSq > maxDist * maxDist) return;
+          
           if (this.isColliding(cell, pellet)) {
             cell.mass += pellet.mass;
             this.pellets.delete(pelletId);
@@ -254,8 +289,16 @@ export class GameWorld {
           }
         });
 
-        // Player vs Feed Pellets
+        // Player vs Feed Pellets (optimized with early distance check)
         this.feedPellets.forEach((feedPellet, feedPelletId) => {
+          const dx = cellX - feedPellet.x;
+          const dy = cellY - feedPellet.y;
+          const distSq = dx * dx + dy * dy;
+          const maxDist = cellRadius + 30; // Feed pellets are larger
+          
+          // Early exit: skip if too far away
+          if (distSq > maxDist * maxDist) return;
+          
           if (this.isColliding(cell, feedPellet)) {
             cell.mass += feedPellet.mass;
             this.feedPellets.delete(feedPelletId);
@@ -264,13 +307,26 @@ export class GameWorld {
       });
     });
 
-    // Player vs Player
+    // Player vs Player (optimized with early distance check)
     this.players.forEach((player1) => {
       player1.cells.forEach((cell1) => {
+        const cell1Radius = cell1.getRadius();
+        const cell1X = cell1.x;
+        const cell1Y = cell1.y;
+        
         this.players.forEach((player2) => {
           if (player1.id === player2.id) return;
           
           player2.cells.forEach((cell2) => {
+            // Early exit: check distance first before expensive collision check
+            const dx = cell1X - cell2.x;
+            const dy = cell1Y - cell2.y;
+            const distSq = dx * dx + dy * dy;
+            const maxDist = cell1Radius + cell2.getRadius();
+            
+            // Skip if too far away
+            if (distSq > maxDist * maxDist) return;
+            
             if (this.isColliding(cell1, cell2)) {
               // Need to be 25% larger to eat (Agar.io rule)
               if (cell1.mass > cell2.mass * 1.25) {
@@ -289,10 +345,23 @@ export class GameWorld {
       });
     });
 
-    // Player vs Viruses
+    // Player vs Viruses (optimized with early distance check)
     this.players.forEach((player) => {
       player.cells.forEach((cell) => {
+        const cellRadius = cell.getRadius();
+        const cellX = cell.x;
+        const cellY = cell.y;
+        
         this.viruses.forEach((virus, virusId) => {
+          // Early exit: check distance first
+          const dx = cellX - virus.x;
+          const dy = cellY - virus.y;
+          const distSq = dx * dx + dy * dy;
+          const maxDist = cellRadius + virus.getRadius();
+          
+          // Skip if too far away
+          if (distSq > maxDist * maxDist) return;
+          
           if (this.isColliding(cell, virus)) {
             // Virus always splits the cell into many pieces, regardless of size
             // First, gain mass from the virus
@@ -322,8 +391,8 @@ export class GameWorld {
               splitDirY = dirY;
             }
             
-            // Split into many pieces (16 pieces)
-            player.splitWithDirection(16, splitDirX, splitDirY);
+            // Split into even-sized pieces (16 pieces) with reduced impulse for virus splits
+            player.splitIntoEvenPieces(16, splitDirX, splitDirY, 0.5); // 50% impulse for virus splits
             
             // Remove and respawn virus
             this.viruses.delete(virusId);
@@ -340,16 +409,20 @@ export class GameWorld {
               if (velLength > 0.1) {
                 const dirX = cell.vx / velLength;
                 const dirY = cell.vy / velLength;
-                player.splitWithDirection(16, dirX, dirY);
+                player.splitIntoEvenPieces(16, dirX, dirY, 0.5); // 50% impulse for virus projectile splits
               } else {
                 // Use projectile direction (opposite of projectile velocity)
                 const projLength = Math.sqrt(projectile.vx * projectile.vx + projectile.vy * projectile.vy);
                 if (projLength > 0) {
                   const dirX = -projectile.vx / projLength;
                   const dirY = -projectile.vy / projLength;
-                  player.splitWithDirection(16, dirX, dirY);
+                  player.splitIntoEvenPieces(16, dirX, dirY, 0.5); // 50% impulse for virus projectile splits
                 } else {
-                  player.split(16);
+                  // Fallback: split in random direction
+                  const angle = Math.random() * Math.PI * 2;
+                  const dirX = Math.cos(angle);
+                  const dirY = Math.sin(angle);
+                  player.splitIntoEvenPieces(16, dirX, dirY, 0.5);
                 }
               }
               cell.mass *= 0.5;
@@ -405,8 +478,11 @@ export class GameWorld {
   }
 
   massToRadius(mass) {
-    // Match the cell radius calculation
-    return Math.sqrt(mass / Math.PI) * 3.5;
+    // Match the cell radius calculation - faster scaling for larger cells
+    const baseRadius = Math.sqrt(mass / Math.PI);
+    // Scale factor increases with mass for faster growth
+    const scaleFactor = 3.5 + Math.min(mass / 5000, 2.0); // Up to 5.5x for very large cells
+    return baseRadius * scaleFactor;
   }
 
   maintainWorld() {

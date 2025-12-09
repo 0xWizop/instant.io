@@ -28,7 +28,7 @@ export class GameClient {
     this.inputDirX = 0;
     this.inputDirY = 0;
     this.lastInputTime = 0;
-    this.inputRate = 1000 / 40; // 40Hz to match server TPS
+    this.inputRate = 1000 / 60; // 60Hz to match server TPS
 
     // Ping
     this.ping = 0;
@@ -73,8 +73,9 @@ export class GameClient {
     this.setupInput();
     this.setupResize();
 
-    // Start render loop
-    this.app.ticker.add(() => this.render());
+    // Start render loop with smooth delta time
+    this.lastFrameTime = performance.now();
+    this.app.ticker.add((delta) => this.render(delta));
   }
 
   setTheme(isDarkMode) {
@@ -447,13 +448,15 @@ export class GameClient {
     container.addChild(graphics);
     
     // Create text for player name (crisp rendering, properly centered)
+    // Scale text size with cell radius - more aggressive scaling for larger cells
+    const nameFontSize = Math.max(12, Math.min(radius * 0.5, 40)); // Scale more aggressively, max 40px
     const nameText = new PIXI.Text(playerName || 'Player', {
       fontFamily: 'Arial',
-      fontSize: Math.max(14, Math.min(28, radius * 0.35)),
+      fontSize: nameFontSize,
       fill: 0xffffff,
       align: 'center',
       stroke: 0x000000,
-      strokeThickness: 3,
+      strokeThickness: Math.max(2, Math.min(4, radius * 0.05)), // Scale stroke with size
       fontWeight: 'bold',
       resolution: window.devicePixelRatio || 1, // High DPI support
       roundPixels: true // Prevent blurry text
@@ -465,13 +468,15 @@ export class GameClient {
     container.addChild(nameText);
     
     // Create text for cell mass (below name, crisp rendering, properly centered)
+    // Scale text size with cell radius - more aggressive scaling for larger cells
+    const massFontSize = Math.max(10, Math.min(radius * 0.4, 32)); // Scale more aggressively, max 32px
     const massText = new PIXI.Text(Math.floor(cellData.mass).toString(), {
       fontFamily: 'Arial',
-      fontSize: Math.max(11, Math.min(20, radius * 0.28)),
+      fontSize: massFontSize,
       fill: 0xffffff,
       align: 'center',
       stroke: 0x000000,
-      strokeThickness: 2,
+      strokeThickness: Math.max(1.5, Math.min(3, radius * 0.04)), // Scale stroke with size
       fontWeight: 'normal',
       resolution: window.devicePixelRatio || 1, // High DPI support
       roundPixels: true // Prevent blurry text
@@ -497,10 +502,12 @@ export class GameClient {
     graphics.clear();
     this.drawCell(graphics, cellData, radius, isLocal, playerName, playerColor);
     
-    // Update name text
+    // Update name text - scale with cell size
     if (nameText) {
       nameText.text = playerName || 'Player';
-      nameText.style.fontSize = Math.max(14, Math.min(28, radius * 0.35));
+      const nameFontSize = Math.max(12, Math.min(radius * 0.5, 40)); // Scale more aggressively, max 40px
+      nameText.style.fontSize = nameFontSize;
+      nameText.style.strokeThickness = Math.max(2, Math.min(4, radius * 0.05)); // Scale stroke
       nameText.y = Math.round(-radius * 0.12); // Better spacing, rounded for crisp rendering
       nameText.x = 0; // Ensure perfectly centered
       nameText.anchor.set(0.5, 0.5); // Ensure center anchor
@@ -508,10 +515,12 @@ export class GameClient {
       nameText.visible = radius > 20;
     }
     
-    // Update mass text
+    // Update mass text - scale with cell size
     if (massText) {
       massText.text = Math.floor(cellData.mass).toString();
-      massText.style.fontSize = Math.max(11, Math.min(20, radius * 0.28));
+      const massFontSize = Math.max(10, Math.min(radius * 0.4, 32)); // Scale more aggressively, max 32px
+      massText.style.fontSize = massFontSize;
+      massText.style.strokeThickness = Math.max(1.5, Math.min(3, radius * 0.04)); // Scale stroke
       massText.y = Math.round(radius * 0.12); // Better spacing, rounded for crisp rendering
       massText.x = 0; // Ensure perfectly centered
       massText.anchor.set(0.5, 0.5); // Ensure center anchor
@@ -542,6 +551,7 @@ export class GameClient {
         borderColor = color * 0.6; // Fallback: darker version
       }
     } else if (isLocal) {
+      // Fallback: should rarely happen since server always sends color
       color = 0x00ff00; // Green for local player
       borderColor = 0x00ffff; // Cyan border
     } else if (isBot) {
@@ -562,6 +572,10 @@ export class GameClient {
     const radius = this.massToRadius(pelletData.mass);
     const graphics = new PIXI.Graphics();
     graphics.pelletData = pelletData;
+    
+    // Set position immediately so pellet appears instantly at spawn location
+    graphics.x = pelletData.x;
+    graphics.y = pelletData.y;
     
     const color = this.hexToNumber(pelletData.color || '#ffffff');
     graphics.beginFill(color);
@@ -715,8 +729,11 @@ export class GameClient {
   }
 
   massToRadius(mass) {
-    // Match server radius calculation
-    return Math.sqrt(mass / Math.PI) * 3.5;
+    // Match server radius calculation - faster scaling for larger cells
+    const baseRadius = Math.sqrt(mass / Math.PI);
+    // Scale factor increases with mass for faster growth
+    const scaleFactor = 3.5 + Math.min(mass / 5000, 2.0); // Up to 5.5x for very large cells
+    return baseRadius * scaleFactor;
   }
 
   hexToNumber(hex) {
@@ -833,8 +850,11 @@ export class GameClient {
     }, 1000);
   }
 
-  render() {
+  render(delta = 1) {
     if (!this.serverState) return;
+    
+    // Frame-rate independent interpolation factor (normalize to 60fps)
+    const deltaNormalized = Math.min(delta / 1.0, 2.0); // Cap at 2x for stability
 
     // Calculate camera position (follow local player)
     const localPlayer = this.players.get(this.playerId);
@@ -845,7 +865,10 @@ export class GameClient {
       // Calculate zoom based on largest cell size
       const largestCell = localPlayer.data.cells.reduce((largest, cell) => 
         cell.mass > largest.mass ? cell : largest, localPlayer.data.cells[0]);
-      const cellRadius = Math.sqrt(largestCell.mass / Math.PI) * 3.5; // Match server radius calculation
+      // Match server radius calculation with faster scaling
+      const baseRadius = Math.sqrt(largestCell.mass / Math.PI);
+      const scaleFactor = 3.5 + Math.min(largestCell.mass / 5000, 2.0);
+      const cellRadius = baseRadius * scaleFactor;
       
       // Dynamic zoom: ensure cell looks good on screen (only if user hasn't manually zoomed)
       if (!this.manualZoom) {
@@ -855,15 +878,22 @@ export class GameClient {
         const desiredVisibleRadius = cellRadius * 3.5;
         const idealZoom = baseViewport / (desiredVisibleRadius * 2);
         
+        // For larger cells, allow more zoom out
+        // Scale maxZoom based on cell size - larger cells need more zoom out capability
+        const sizeMultiplier = Math.max(1.0, cellRadius / 200); // Scale up for cells > 200px radius
+        const maxZoomForSize = Math.min(4.5, 2.0 + (sizeMultiplier - 1) * 1.5); // Up to 4.5x zoom out for very large cells
+        
         // Set target zoom to ensure cell is clearly visible
-        this.targetZoom = Math.max(0.8, Math.min(2.0, idealZoom));
-        this.maxZoom = Math.min(2.5, idealZoom * 1.2); // Allow some zoom out
+        this.targetZoom = Math.max(0.8, Math.min(maxZoomForSize, idealZoom));
+        this.maxZoom = Math.min(5.0, maxZoomForSize * 1.3); // Allow even more zoom out for larger cells
       } else {
         // User has manually zoomed, update maxZoom based on cell size but don't override targetZoom
         const baseViewport = Math.min(this.app.screen.width, this.app.screen.height);
         const desiredVisibleRadius = cellRadius * 3.5;
         const idealZoom = baseViewport / (desiredVisibleRadius * 2);
-        this.maxZoom = Math.min(2.5, idealZoom * 1.2); // Update maxZoom for bounds
+        const sizeMultiplier = Math.max(1.0, cellRadius / 200); // Scale up for cells > 200px radius
+        const maxZoomForSize = Math.min(4.5, 2.0 + (sizeMultiplier - 1) * 1.5); // Up to 4.5x zoom out for very large cells
+        this.maxZoom = Math.min(5.0, maxZoomForSize * 1.3); // Update maxZoom for bounds, allow more zoom out
       }
 
       // Smooth zoom interpolation
@@ -885,7 +915,7 @@ export class GameClient {
     }
 
     // Render all entities
-    this.renderPlayers();
+    this.renderPlayers(deltaNormalized);
     this.renderPellets();
     this.renderViruses();
     this.renderFeedPellets();
@@ -971,21 +1001,30 @@ export class GameClient {
     ctx.globalAlpha = 1;
   }
 
-  renderPlayers() {
+  renderPlayers(deltaNormalized = 1.0) {
     this.players.forEach((player, playerId) => {
       const isLocal = playerId === this.playerId;
       player.data.cells.forEach((cellData, index) => {
         const cellGraphics = player.container.children[index];
         if (cellGraphics) {
-          // Improved interpolation for smoother, more fluid movement
-          // Use higher interpolation for remote players, lower for local (client prediction)
-          const alpha = isLocal ? 0.25 : 0.12; // Smoother interpolation
+          // Optimized smooth interpolation - use simpler calculation for better performance
           const targetX = cellData.x;
           const targetY = cellData.y;
           
+          // Calculate distance squared (avoid sqrt for performance)
+          const dx = targetX - cellGraphics.x;
+          const dy = targetY - cellGraphics.y;
+          const distanceSq = dx * dx + dy * dy;
+          
+          // Use fixed alpha for better performance (still smooth)
+          const alpha = isLocal ? 0.4 : 0.25; // Higher alpha = faster interpolation
+          
+          // Apply frame-rate independent interpolation
+          const frameAlpha = 1 - Math.pow(1 - alpha, deltaNormalized);
+          
           // Smooth position interpolation
-          cellGraphics.x += (targetX - cellGraphics.x) * alpha;
-          cellGraphics.y += (targetY - cellGraphics.y) * alpha;
+          cellGraphics.x += dx * frameAlpha;
+          cellGraphics.y += dy * frameAlpha;
         }
       });
     });
@@ -994,10 +1033,9 @@ export class GameClient {
   renderPellets() {
     this.pellets.forEach((graphics, id) => {
       if (graphics.pelletData) {
-        // Smooth interpolation for pellets
-        const alpha = 0.25;
-        graphics.x += (graphics.pelletData.x - graphics.x) * alpha;
-        graphics.y += (graphics.pelletData.y - graphics.y) * alpha;
+        // Pellets appear instantly at their spawn position (no interpolation)
+        graphics.x = graphics.pelletData.x;
+        graphics.y = graphics.pelletData.y;
       }
     });
   }

@@ -82,7 +82,7 @@ export class GameServer {
   }
 
   startGameLoop() {
-    const TPS = 40; // Reduced from 60 to 40 for lower latency
+    const TPS = 60; // Increased to 60 for smoother physics
     const tickInterval = 1000 / TPS;
     
     setInterval(() => {
@@ -102,6 +102,8 @@ export class GameServer {
         id: p.id,
         name: p.name,
         score: p.score,
+        color: p.color,
+        isBot: p.isBot,
         cells: p.cells.map(c => ({
           id: c.id,
           x: Math.round(c.x * 10) / 10, // Round to 1 decimal
