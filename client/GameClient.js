@@ -15,6 +15,7 @@ export class GameClient {
     this.viruses = new Map();
     this.feedPellets = new Map();
     this.virusProjectiles = new Map();
+    this.feedParticles = []; // Visual particles for feeding
 
     // Interpolation
     this.serverState = null;
@@ -405,31 +406,43 @@ export class GameClient {
     const player = this.players.get(playerData.id);
     if (!player) return;
 
+    const previousCellCount = player.data.cells ? player.data.cells.length : 0;
     player.data = playerData;
 
-    // Update cells
+    // Update cells with smooth transitions
     const existingCells = player.container.children;
     const isLocal = playerData.id === this.playerId;
     playerData.cells.forEach((cellData, index) => {
       let cellGraphics;
-      if (index < existingCells.length) {
-        cellGraphics = existingCells[index];
-      } else {
+      const isNewCell = index >= existingCells.length;
+      if (isNewCell) {
+        // New cell created (split) - animate in with smooth scale
         cellGraphics = this.createCellGraphics(cellData, isLocal, playerData.name, playerData.color);
+        // Set initial position immediately to prevent interpolation from wrong position
+        cellGraphics.x = cellData.x;
+        cellGraphics.y = cellData.y;
+        cellGraphics.scale.set(0); // Start at 0 scale for animation
+        cellGraphics.animationTime = 0; // Animation timer
+        cellGraphics.alpha = 1.0; // Start fully visible
         player.container.addChild(cellGraphics);
+      } else {
+        cellGraphics = existingCells[index];
+        // Ensure smooth transitions for existing cells
+        if (cellGraphics.animationTime === undefined) {
+          cellGraphics.animationTime = undefined; // Not animating
+        }
       }
       this.updateCellGraphics(cellGraphics, cellData, isLocal, playerData.name, playerData.color);
     });
 
-    // Remove extra cells
+    // Remove extra cells immediately (merge happens instantly, no fade needed)
+    // The smooth interpolation will handle the visual transition
     while (player.container.children.length > playerData.cells.length) {
       player.container.removeChildAt(player.container.children.length - 1);
     }
 
     // Update stats for local player
     if (playerData.id === this.playerId) {
-      const totalMass = playerData.cells.reduce((sum, cell) => sum + cell.mass, 0);
-      document.getElementById('mass').textContent = Math.floor(totalMass);
       document.getElementById('cells').textContent = playerData.cells.length;
       document.getElementById('score').textContent = playerData.score || 0;
     }
@@ -439,11 +452,15 @@ export class GameClient {
     const radius = this.massToRadius(cellData.mass);
     const container = new PIXI.Container();
     
+    // Ensure container is fully opaque
+    container.alpha = 1.0;
+    
     // Create graphics for the cell circle
     const graphics = new PIXI.Graphics();
     graphics.cellData = cellData;
     graphics.isLocal = isLocal;
     graphics.playerName = playerName;
+    graphics.alpha = 1.0; // Ensure graphics are fully opaque
     
     container.addChild(graphics);
     
@@ -499,6 +516,12 @@ export class GameClient {
     graphics.cellData = cellData;
     graphics.playerName = playerName;
     const radius = this.massToRadius(cellData.mass);
+    
+    // Store target scale for animation (only for split animation, not size changes)
+    if (container.targetScale === undefined) {
+      container.targetScale = 1.0;
+    }
+    
     graphics.clear();
     this.drawCell(graphics, cellData, radius, isLocal, playerName, playerColor);
     
@@ -532,6 +555,9 @@ export class GameClient {
   drawCell(graphics, cellData, radius, isLocal, playerName, playerColor) {
     const isBot = playerName && playerName.startsWith('Bot');
     
+    // Ensure cell is fully opaque (not translucent)
+    graphics.alpha = 1.0;
+    
     // Use player's color if available, otherwise fallback to defaults
     let color, borderColor;
     if (playerColor) {
@@ -562,8 +588,8 @@ export class GameClient {
       borderColor = 0xff0000; // Dark red border
     }
 
-    graphics.beginFill(color);
-    graphics.lineStyle(2, borderColor);
+    graphics.beginFill(color, 1.0); // Explicitly set alpha to 1.0
+    graphics.lineStyle(2, borderColor, 1.0); // Explicitly set alpha to 1.0
     graphics.drawCircle(0, 0, radius);
     graphics.endFill();
   }
@@ -639,6 +665,62 @@ export class GameClient {
 
     this.gameLayer.addChild(graphics);
     this.feedPellets.set(pelletData.id, graphics);
+    
+    // Create visual particles showing mass coming out
+    this.createFeedParticles(pelletData.x, pelletData.y, pelletData.vx, pelletData.vy, 0xffff00);
+  }
+  
+  createFeedParticles(x, y, vx, vy, color) {
+    // Create 5-8 small particles that fade out
+    const particleCount = 5 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (Math.PI * 2 * i) / particleCount + Math.random() * 0.5;
+      const speed = 2 + Math.random() * 3;
+      const particle = {
+        x: x,
+        y: y,
+        vx: (vx * 0.3) + Math.cos(angle) * speed,
+        vy: (vy * 0.3) + Math.sin(angle) * speed,
+        life: 1.0,
+        maxLife: 1.0,
+        size: 2 + Math.random() * 3,
+        color: color,
+        graphics: new PIXI.Graphics()
+      };
+      particle.graphics.beginFill(color);
+      particle.graphics.drawCircle(0, 0, particle.size);
+      particle.graphics.endFill();
+      particle.graphics.x = x;
+      particle.graphics.y = y;
+      this.gameLayer.addChild(particle.graphics);
+      this.feedParticles.push(particle);
+    }
+  }
+  
+  updateFeedParticles(deltaNormalized) {
+    for (let i = this.feedParticles.length - 1; i >= 0; i--) {
+      const particle = this.feedParticles[i];
+      particle.life -= deltaNormalized * 0.05; // Fade out over time
+      
+      if (particle.life <= 0) {
+        this.gameLayer.removeChild(particle.graphics);
+        particle.graphics.destroy();
+        this.feedParticles.splice(i, 1);
+        continue;
+      }
+      
+      // Update position
+      particle.x += particle.vx * deltaNormalized;
+      particle.y += particle.vy * deltaNormalized;
+      particle.vx *= 0.95; // Slow down
+      particle.vy *= 0.95;
+      
+      // Update graphics
+      particle.graphics.x = particle.x;
+      particle.graphics.y = particle.y;
+      particle.graphics.alpha = particle.life;
+      particle.graphics.scale.set(particle.life); // Shrink as it fades
+    }
   }
 
   updateFeedPelletEntity(pelletData) {
@@ -731,8 +813,8 @@ export class GameClient {
   massToRadius(mass) {
     // Match server radius calculation - faster scaling for larger cells
     const baseRadius = Math.sqrt(mass / Math.PI);
-    // Scale factor increases with mass for faster growth
-    const scaleFactor = 3.5 + Math.min(mass / 5000, 2.0); // Up to 5.5x for very large cells
+    // Scale factor increases with mass for faster growth - INCREASED for larger visual size
+    const scaleFactor = 4.5 + Math.min(mass / 5000, 2.5); // Up to 7x for very large cells (was 5.5x)
     return baseRadius * scaleFactor;
   }
 
@@ -878,22 +960,22 @@ export class GameClient {
         const desiredVisibleRadius = cellRadius * 3.5;
         const idealZoom = baseViewport / (desiredVisibleRadius * 2);
         
-        // For larger cells, allow more zoom out
+        // For larger cells, allow much more zoom out
         // Scale maxZoom based on cell size - larger cells need more zoom out capability
         const sizeMultiplier = Math.max(1.0, cellRadius / 200); // Scale up for cells > 200px radius
-        const maxZoomForSize = Math.min(4.5, 2.0 + (sizeMultiplier - 1) * 1.5); // Up to 4.5x zoom out for very large cells
+        const maxZoomForSize = Math.min(8.0, 3.0 + (sizeMultiplier - 1) * 2.5); // Up to 8x zoom out for very large cells
         
         // Set target zoom to ensure cell is clearly visible
         this.targetZoom = Math.max(0.8, Math.min(maxZoomForSize, idealZoom));
-        this.maxZoom = Math.min(5.0, maxZoomForSize * 1.3); // Allow even more zoom out for larger cells
+        this.maxZoom = Math.min(10.0, maxZoomForSize * 1.5); // Allow much more zoom out (up to 10x)
       } else {
         // User has manually zoomed, update maxZoom based on cell size but don't override targetZoom
         const baseViewport = Math.min(this.app.screen.width, this.app.screen.height);
         const desiredVisibleRadius = cellRadius * 3.5;
         const idealZoom = baseViewport / (desiredVisibleRadius * 2);
         const sizeMultiplier = Math.max(1.0, cellRadius / 200); // Scale up for cells > 200px radius
-        const maxZoomForSize = Math.min(4.5, 2.0 + (sizeMultiplier - 1) * 1.5); // Up to 4.5x zoom out for very large cells
-        this.maxZoom = Math.min(5.0, maxZoomForSize * 1.3); // Update maxZoom for bounds, allow more zoom out
+        const maxZoomForSize = Math.min(8.0, 3.0 + (sizeMultiplier - 1) * 2.5); // Up to 8x zoom out for very large cells
+        this.maxZoom = Math.min(10.0, maxZoomForSize * 1.5); // Update maxZoom for bounds, allow much more zoom out (up to 10x)
       }
 
       // Smooth zoom interpolation
@@ -914,11 +996,13 @@ export class GameClient {
       this.gameLayer.y = offsetY * this.zoom;
     }
 
-    // Render all entities
+    // Render all entities - render cells first so pellets appear on top (cells are opaque)
     this.renderPlayers(deltaNormalized);
-    this.renderPellets();
     this.renderViruses();
+    // Render pellets after cells so they appear on top (cells are fully opaque)
+    this.renderPellets();
     this.renderFeedPellets();
+    this.updateFeedParticles(deltaNormalized);
     this.renderVirusProjectiles();
     this.renderMinimap();
 
@@ -1007,24 +1091,53 @@ export class GameClient {
       player.data.cells.forEach((cellData, index) => {
         const cellGraphics = player.container.children[index];
         if (cellGraphics) {
-          // Optimized smooth interpolation - use simpler calculation for better performance
+          // Ultra-smooth position interpolation with better easing
           const targetX = cellData.x;
           const targetY = cellData.y;
           
-          // Calculate distance squared (avoid sqrt for performance)
           const dx = targetX - cellGraphics.x;
           const dy = targetY - cellGraphics.y;
-          const distanceSq = dx * dx + dy * dy;
+          const distance = Math.sqrt(dx * dx + dy * dy);
           
-          // Use fixed alpha for better performance (still smooth)
-          const alpha = isLocal ? 0.4 : 0.25; // Higher alpha = faster interpolation
-          
-          // Apply frame-rate independent interpolation
+          // Use much smoother interpolation - higher alpha for more responsive movement
+          // For new cells (splits), use even higher alpha to snap to position faster
+          const isNewCell = cellGraphics.animationTime !== undefined;
+          const alpha = isNewCell ? 0.9 : (isLocal ? 0.75 : 0.55); // Higher alpha for new cells and local player
           const frameAlpha = 1 - Math.pow(1 - alpha, deltaNormalized);
           
-          // Smooth position interpolation
-          cellGraphics.x += dx * frameAlpha;
-          cellGraphics.y += dy * frameAlpha;
+          // Apply smooth easing for very small movements (prevents jitter)
+          let interpolationFactor = frameAlpha;
+          if (distance < 0.5) {
+            // For very small movements, snap immediately to prevent jitter
+            interpolationFactor = 1.0;
+          } else if (distance < 2) {
+            // For small movements, use linear interpolation
+            interpolationFactor = Math.min(1, distance);
+          }
+          
+          // Ultra-smooth position interpolation
+          cellGraphics.x += dx * interpolationFactor;
+          cellGraphics.y += dy * interpolationFactor;
+          
+          // Smooth scale animation for new cells (split animation) - faster and more visible
+          if (cellGraphics.animationTime !== undefined) {
+            cellGraphics.animationTime += deltaNormalized * 0.12; // Faster animation (was 0.06)
+            if (cellGraphics.animationTime < 1.0) {
+              // Smooth ease-out animation with bounce effect for more visible split
+              const t = cellGraphics.animationTime;
+              // Use elastic ease-out for a more noticeable, smooth split animation
+              const easeOut = t < 1 ? 1 - Math.pow(1 - t, 3) * (1 - t * 0.3) : 1;
+              const currentScale = easeOut; // Scale from 0 to 1
+              cellGraphics.scale.set(currentScale);
+            } else {
+              // Animation complete
+              cellGraphics.scale.set(1.0);
+              cellGraphics.animationTime = undefined;
+            }
+          } else if (cellGraphics.scale.x !== 1.0) {
+            // Ensure scale is 1.0 if not animating
+            cellGraphics.scale.set(1.0);
+          }
         }
       });
     });

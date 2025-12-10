@@ -12,7 +12,7 @@ export class GameWorld {
       virusMassThreshold: 2000,
       virusMaxMass: 2000,
       autoSplitMass: 22500,
-      massDecayRate: 0.0001, // Base decay rate (0.01% per tick, scales with mass)
+      massDecayRate: 0.00002, // Base decay rate (0.002% per tick, scales with mass) - much slower
       mapWidth: 5000,
       mapHeight: 5000,
       pelletCount: 1000,

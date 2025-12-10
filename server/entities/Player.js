@@ -12,6 +12,11 @@ export class Player {
     this.score = 0;
     this.config = config;
     this.color = this.generateColor();
+    
+    // Track split timing for double/triple splits
+    this.lastSplitTime = 0;
+    this.splitSequence = 0; // 0 = no split, 1 = single split, 2 = double split, 3 = triple split
+    this.SPLIT_SEQUENCE_WINDOW = 300; // 300ms window for split sequences
 
     // Spawn initial cell
     this.spawn(config);
@@ -105,30 +110,69 @@ export class Player {
       }
     }
 
-    // For single split (targetCount = 2), split ALL eligible cells in half
-    // This enables recursive splitting: 1 -> 2 -> 4 -> 8, etc.
+    // Check for split sequence (double/triple split) - only for rapid consecutive splits
+    const now = Date.now();
+    const timeSinceLastSplit = now - this.lastSplitTime;
+    
+    // Reset sequence if too much time has passed
+    if (timeSinceLastSplit >= this.SPLIT_SEQUENCE_WINDOW) {
+      this.splitSequence = 0;
+    }
+    
     if (effectiveTargetCount === 2) {
-      // Collect all cells that can split (have enough mass and aren't on cooldown)
+      // Single split - ALWAYS allow if mass is available, regardless of previous splits
+      // Only use sequence logic for RAPID consecutive splits (within 300ms)
+      if (timeSinceLastSplit < this.SPLIT_SEQUENCE_WINDOW && this.splitSequence > 0) {
+        // This is a rapid consecutive split - could be double or triple
+        this.splitSequence++;
+        if (this.splitSequence === 2) {
+          // Double split: create 4 cells in a line, border-to-border
+          this.splitIntoLine(4, dirX, dirY);
+          this.lastSplitTime = now;
+          return;
+        } else if (this.splitSequence >= 3) {
+          // Triple split: create 8 cells in a line, border-to-border
+          this.splitIntoLine(8, dirX, dirY);
+          this.splitSequence = 0; // Reset sequence
+          this.lastSplitTime = now;
+          return;
+        }
+      }
+      
+      // Normal single split - ALWAYS works if mass is available
+      // Collect all cells that can split (have enough mass)
       const cellsToSplit = [];
       for (const cell of this.cells) {
-        if (cell.mass >= 100 && cell.canSplit() && this.cells.length < this.getMaxCells()) {
+        // If instant merge is enabled, always allow splits if mass >= 100
+        const canSplitNow = this.config.instantMerge ? true : cell.canSplit();
+        if (cell.mass >= 100 && canSplitNow && this.cells.length < this.getMaxCells()) {
           cellsToSplit.push(cell);
         }
       }
       
       // Split each eligible cell in half (recursive splitting)
-      // This allows: 1 cell -> 2 cells -> 4 cells -> 8 cells, etc.
-      for (const cell of cellsToSplit) {
-        if (this.cells.length >= this.getMaxCells()) break; // Respect max cell limit
-        
-        const newCell = cell.split(2, dirX, dirY, 1.0);
-        if (newCell) {
-          newCell.setInstantMerge(this.config.instantMerge);
-          this.cells.push(newCell);
+      if (cellsToSplit.length > 0) {
+        for (const cell of cellsToSplit) {
+          if (this.cells.length >= this.getMaxCells()) break;
+          
+          const newCell = cell.split(2, dirX, dirY, 1.0);
+          if (newCell) {
+            newCell.setInstantMerge(this.config.instantMerge);
+            cell.setInstantMerge(this.config.instantMerge);
+            this.cells.push(newCell);
+          }
         }
+        
+        // Update sequence tracking (only for rapid splits)
+        if (timeSinceLastSplit < this.SPLIT_SEQUENCE_WINDOW) {
+          this.splitSequence = 1; // Mark as first in potential sequence
+        } else {
+          this.splitSequence = 0; // Reset if too much time passed
+        }
+        this.lastSplitTime = now;
       }
       
-      return; // Done with recursive split
+      return;
     }
 
     // For multiple splits, use the existing logic (with max cell limit)
@@ -151,11 +195,15 @@ export class Player {
         const cell = this.cells[i];
         
         // Check if cell can split and we haven't reached max cells
-        if (cell.canSplit() && cell.mass >= 100 && this.cells.length < effectiveTargetCount) {
+        // If instant merge is enabled, always allow splits if mass >= 100
+        const canSplitNow = this.config.instantMerge ? true : cell.canSplit();
+        if (canSplitNow && cell.mass >= 100 && this.cells.length < effectiveTargetCount) {
           const newCell = cell.split(effectiveTargetCount, dirX, dirY, impulseMultiplier);
           if (newCell) {
             // Set split cooldown for new cell
             newCell.setInstantMerge(this.config.instantMerge);
+            // Ensure original cell also maintains instant merge setting
+            cell.setInstantMerge(this.config.instantMerge);
             this.cells.push(newCell);
             splitOccurred = true;
             break; // Split one at a time
@@ -165,6 +213,65 @@ export class Player {
 
       // If no split occurred, break to avoid infinite loop
       if (!splitOccurred) break;
+    }
+  }
+
+  splitIntoLine(cellCount, dirX, dirY) {
+    // Split into a line formation: cells placed border-to-border in a line
+    // ALWAYS split into even pieces (4 for double, 8 for triple)
+    if (this.cells.length === 0) return;
+    
+    let largestCell = this.cells[0];
+    for (const cell of this.cells) {
+      if (cell.mass > largestCell.mass) {
+        largestCell = cell;
+      }
+    }
+    
+    // Ensure even split count (4 or 8)
+    const evenCount = cellCount === 4 ? 4 : 8; // Always 4 or 8
+    const maxCells = this.getMaxCells();
+    const effectiveCount = Math.min(evenCount, maxCells);
+    if (this.cells.length >= effectiveCount || largestCell.mass < 100 * effectiveCount) return;
+    
+    // Calculate mass per cell - ensure perfectly even distribution
+    const totalMass = largestCell.mass;
+    const massPerCell = totalMass / effectiveCount; // Perfectly even split
+    
+    // Remove the original cell
+    this.cells = this.cells.filter(c => c.id !== largestCell.id);
+    
+    // Create cells in a line, border-to-border
+    // Use actual radius calculation to get proper spacing
+    const tempCell = new Cell(0, 0, 0, massPerCell, this.id);
+    const cellRadius = tempCell.getRadius();
+    const spacing = cellRadius * 2.1; // Border-to-border spacing (slightly more than 2 * radius for slight gap)
+    
+    // Start position: offset backward from center so line extends forward
+    const startOffset = -(effectiveCount - 1) * spacing / 2;
+    
+    for (let i = 0; i < effectiveCount; i++) {
+      const offset = startOffset + i * spacing;
+      const newX = largestCell.x + dirX * offset;
+      const newY = largestCell.y + dirY * offset;
+      
+      const newCell = new Cell(
+        Date.now() + Math.random() + i,
+        newX,
+        newY,
+        massPerCell,
+        this.id
+      );
+      
+      // Minimal velocity - cells should stay in line
+      newCell.vx = dirX * 1.5; // Small forward velocity
+      newCell.vy = dirY * 1.5;
+      newCell.setInstantMerge(this.config.instantMerge);
+      newCell.splitTime = Date.now();
+      newCell.splitDirectionX = dirX;
+      newCell.splitDirectionY = dirY;
+      
+      this.cells.push(newCell);
     }
   }
 
@@ -202,14 +309,14 @@ export class Player {
       const totalMass = cell.mass;
       const massPerPiece = totalMass / actualPieceCount;
       
-      // Create all pieces at once
+      // Create all pieces at once - place them closer together so they can merge naturally
       for (let i = 0; i < actualPieceCount; i++) {
-        // Virus/burst splits need proper spacing to prevent overlap
-        // Use larger radius offset for better separation - scale with number of pieces
+        // Virus/burst splits: place pieces closer together (not in a wide circle)
+        // They should be able to merge naturally, not stuck in a circle
         const angle = (Math.PI * 2 * i) / actualPieceCount;
-        // Scale radius offset based on piece count - more pieces = more spacing needed
-        const baseRadiusOffset = 0.6; // Base 60% of radius
-        const pieceCountFactor = Math.min(actualPieceCount / 8, 1.5); // Scale up to 1.5x for more pieces
+        // Much smaller radius offset - pieces start close together
+        const baseRadiusOffset = 0.25; // Only 25% of radius - much closer together
+        const pieceCountFactor = Math.min(actualPieceCount / 16, 1.0); // Scale down for more pieces
         const radiusOffset = baseRadiusOffset * pieceCountFactor;
         const offsetX = Math.cos(angle) * cell.getRadius() * radiusOffset;
         const offsetY = Math.sin(angle) * cell.getRadius() * radiusOffset;
@@ -222,26 +329,22 @@ export class Player {
           this.id
         );
         
-        // Apply impulse in the split direction (blended with radial direction)
+        // Apply minimal impulse - pieces should stay close and merge naturally
+        // Use radial direction but with very low impulse so they don't fly apart
         const radialDirX = Math.cos(angle);
         const radialDirY = Math.sin(angle);
-        const blendX = (dirX * 0.6 + radialDirX * 0.4);
-        const blendY = (dirY * 0.6 + radialDirY * 0.4);
-        const blendLen = Math.sqrt(blendX * blendX + blendY * blendY);
-        const finalDirX = blendLen > 0 ? blendX / blendLen : radialDirX;
-        const finalDirY = blendLen > 0 ? blendY / blendLen : radialDirY;
         
-        // Increased impulse for virus splits to prevent overlap - no overlap until merge attempt
-        const baseImpulseSpeed = 7.5; // Increased base for better separation
+        // Very low impulse - just enough to prevent initial overlap, not enough to keep them apart
+        const baseImpulseSpeed = 2.0; // Much lower base impulse
         const impulseSpeed = baseImpulseSpeed * impulseMultiplier;
         
-        // Apply strong impulse for good separation - cells should not overlap initially
-        newCell.vx = finalDirX * impulseSpeed * 1.8; // 80% more impulse for better separation
-        newCell.vy = finalDirY * impulseSpeed * 1.8;
+        // Apply minimal radial impulse - pieces will naturally come together
+        newCell.vx = radialDirX * impulseSpeed * 0.5; // Very low impulse
+        newCell.vy = radialDirY * impulseSpeed * 0.5;
         newCell.setInstantMerge(this.config.instantMerge);
         newCell.splitTime = Date.now();
-        newCell.splitDirectionX = finalDirX;
-        newCell.splitDirectionY = finalDirY;
+        newCell.splitDirectionX = radialDirX; // Use radial direction for split tracking
+        newCell.splitDirectionY = radialDirY;
         
         this.cells.push(newCell);
       }
@@ -425,15 +528,18 @@ export class Player {
           // BUT: If cursor is centered, allow merge even during cooldown (player intent is clear)
           const timeSinceSplit1 = now - cell1.splitTime;
           const timeSinceSplit2 = now - cell2.splitTime;
-          const SPLIT_MERGE_COOLDOWN = 400; // Short 400ms cooldown
+          const SPLIT_MERGE_COOLDOWN = 200; // Reduced to 200ms cooldown
           const isRecentSplit1 = cell1.splitTime > 0 && timeSinceSplit1 < SPLIT_MERGE_COOLDOWN;
           const isRecentSplit2 = cell2.splitTime > 0 && timeSinceSplit2 < SPLIT_MERGE_COOLDOWN;
-          const isCursorCentered = cursorToMidRatio < 0.3 || isCursorOnEitherCell; // Cursor is centered on this pair OR on either cell
+          const isCursorCentered = cursorToMidRatio < 0.4 || isCursorOnEitherCell; // More lenient - cursor is centered on this pair OR on either cell
           
-          // If either cell was recently split, require minimal separation UNLESS cursor is centered
-          if ((isRecentSplit1 || isRecentSplit2) && !isCursorCentered) {
-            // Cells that were just split need minimal separation before merging
-            const minSeparation = Math.max(r1, r2) * 0.3; // Only 30% separation needed
+          // If cursor is centered, allow instant merge even after split
+          if (isCursorCentered) {
+            // Cursor centered = player wants to merge immediately, bypass cooldown
+            // Continue to merge logic below
+          } else if ((isRecentSplit1 || isRecentSplit2)) {
+            // Cells that were just split need minimal separation before merging (only if cursor not centered)
+            const minSeparation = Math.max(r1, r2) * 0.2; // Only 20% separation needed
             if (dist < minSeparation) {
               continue; // Too close, can't merge yet (unless cursor is centered)
             }
@@ -483,29 +589,29 @@ export class Player {
       }
     }
 
-    // Check auto-split at 22.5k mass
-    this.cells.forEach((cell) => {
-      if (cell.mass >= config.autoSplitMass) {
-        // Auto-split into multiple pieces
-        const splitCount = Math.min(16, Math.floor(cell.mass / 1400));
-        cell.mass = config.autoSplitMass / splitCount;
-        
-        // Create additional cells
-        for (let i = 1; i < splitCount; i++) {
-          const newCell = new Cell(
-            Date.now() + Math.random() + i,
-            cell.x + (Math.random() - 0.5) * 50,
-            cell.y + (Math.random() - 0.5) * 50,
-            config.autoSplitMass / splitCount,
-            this.id
-          );
-          newCell.vx = (Math.random() - 0.5) * 10;
-          newCell.vy = (Math.random() - 0.5) * 10;
-          newCell.setInstantMerge(config.instantMerge);
-          this.cells.push(newCell);
-        }
+    // Check auto-split at 22.5k mass - find largest cell over threshold
+    let cellToAutoSplit = null;
+    let maxMass = 0;
+    for (const cell of this.cells) {
+      if (cell.mass >= config.autoSplitMass && cell.mass > maxMass) {
+        cellToAutoSplit = cell;
+        maxMass = cell.mass;
       }
-    });
+    }
+    
+    if (cellToAutoSplit) {
+      // Auto-split into 16 even pieces
+      const centerX = this.getCenterX();
+      const centerY = this.getCenterY();
+      const dx = this.cursorX - centerX;
+      const dy = this.cursorY - centerY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const dirX = dist > 0 ? dx / dist : 1;
+      const dirY = dist > 0 ? dy / dist : 0;
+      
+      // Use splitIntoEvenPieces to properly split
+      this.splitIntoEvenPieces(16, dirX, dirY, 0.6);
+    }
   }
 
   instantMergeCells(cell1, cell2) {

@@ -22,8 +22,9 @@ export class Cell {
 
   updateMovement(inputDirX, inputDirY, config) {
     // Silky smooth movement: blend toward a mass-scaled target velocity
-    const BASE_SPEED = 18.0;      // Much higher base speed for faster movement
-    const MASS_FACTOR = 0.0012;   // Mass scaling factor (bigger = slower) - increased to reduce small cell speed
+    const BASE_SPEED = 18.0;      // Default speed for smallest cells
+    const MIN_MASS = 50;          // Minimum cell mass (starting point)
+    const MASS_FACTOR = 0.0008;   // Gradual mass scaling factor (reduced for smoother transitions)
     const TURN_RESPONSE = 0.15;   // Lower response for smoother, more gradual turning (was 0.4)
     const ACCELERATION = 0.85;    // Higher acceleration for smoother speed changes
     const FRICTION = 0.985;       // Very low friction for smoother deceleration
@@ -48,12 +49,11 @@ export class Cell {
         shouldDampenSplit = dotProduct < 0.3; // Less than 30% aligned with split direction
       }
 
-      // Speed formula: larger mass = slower speed
-      // Add cap to prevent very small cells from being too fast
-      const rawSpeed = BASE_SPEED / (1 + this.mass * MASS_FACTOR);
-      // Cap maximum speed for very small cells (after virus splits) - they should be faster but not too fast
-      const MAX_SPEED = 24.0; // Maximum speed cap (reduced from unlimited)
-      const targetSpeed = Math.min(rawSpeed, MAX_SPEED);
+      // Gradual speed formula: starts at BASE_SPEED for smallest cells, gradually decreases
+      // Use square root scaling for smoother, more gradual transitions
+      const massRatio = Math.max(1, this.mass / MIN_MASS); // Ratio relative to minimum mass (min 1)
+      const speedReduction = Math.sqrt(Math.max(0, massRatio - 1)) * MASS_FACTOR * 50; // Square root for gradual curve, -1 so min mass = 0 reduction
+      const targetSpeed = BASE_SPEED / (1 + speedReduction);
       const targetVx = dirX * targetSpeed;
       const targetVy = dirY * targetSpeed;
 
@@ -89,8 +89,8 @@ export class Cell {
     // Apply mass decay (only if mass is above minimum threshold)
     // Larger cells decay faster to balance pellet consumption
     if (config.massDecayRate > 0 && this.mass > 50) {
-      // Base decay rate scales with mass - larger cells decay faster
-      const massMultiplier = 1 + (this.mass / 2000); // 2x decay at 2000 mass, 3x at 4000, etc.
+      // Base decay rate scales with mass - larger cells decay faster (but much more gradual)
+      const massMultiplier = 1 + (this.mass / 5000); // Much more gradual scaling - 2x decay at 5000 mass
       const decayAmount = this.mass * config.massDecayRate * massMultiplier;
       this.mass = Math.max(50, this.mass - decayAmount); // Minimum mass of 50
     }
@@ -105,8 +105,8 @@ export class Cell {
     // Faster scaling: cells grow larger more quickly as mass increases
     // Using a power curve for faster scaling at higher masses
     const baseRadius = Math.sqrt(this.mass / Math.PI);
-    // Scale factor increases with mass for faster growth
-    const scaleFactor = 3.5 + Math.min(this.mass / 5000, 2.0); // Up to 5.5x for very large cells
+    // Scale factor increases with mass for faster growth - INCREASED for larger visual size
+    const scaleFactor = 4.5 + Math.min(this.mass / 5000, 2.5); // Up to 7x for very large cells (was 5.5x)
     return baseRadius * scaleFactor;
   }
 
@@ -118,8 +118,10 @@ export class Cell {
   }
 
   split(targetCount, dirX, dirY, impulseMultiplier = 1.0) {
-    // Allow split if cooldown is passed OR if instant merge is enabled (cooldown = 0)
+    // If instant merge is enabled (cooldown = 0), always allow split if mass is sufficient
+    // Otherwise check cooldown
     if (this.splitCooldown > 0 && !this.canSplit()) return null;
+    // Always check mass requirement
     if (this.mass < 100) return null;
 
     const currentTime = Date.now();
@@ -192,10 +194,10 @@ export class Cell {
 
     // New cell starts with proper spacing from original cell center (in split direction)
     // Spacing should be relative to cell size and split type:
-    // - Normal splits (attack): Much more distance (120% of radius) for long eject with clear space
+    // - Normal splits (attack): Much more distance (180% of radius) for long eject with clear space
     // - Virus/burst splits (defensive): More distance (40% of radius) to prevent overlap
     const isAttackSplit = impulseMultiplier >= 0.9; // Normal splits are attacks
-    const spacingFactor = isAttackSplit ? 1.2 : 0.4; // 120% for attacks (long eject with space), 40% for defensive
+    const spacingFactor = isAttackSplit ? 1.8 : 0.4; // 180% for attacks (longer eject with space), 40% for defensive
     const ejectionOffset = oldRadius * spacingFactor;
     const newCellX = this.x + splitDirX * ejectionOffset;
     const newCellY = this.y + splitDirY * ejectionOffset;
@@ -228,7 +230,7 @@ export class Cell {
 
     // New cell ejects FROM original cell TOWARD cursor with smooth, long forward velocity
     // Attack splits need much more distance for long eject with clear space
-    const forwardMultiplier = isAttackSplit ? 4.2 : 1.8; // Much more distance for attacks (long eject with space), more for defensive
+    const forwardMultiplier = isAttackSplit ? 5.5 : 1.8; // Even more distance for attacks (longer eject with space), more for defensive
     const forwardImpulse = impulseSpeed * forwardMultiplier;
     // New cell gets strong impulse in split direction (toward cursor), independent of original cell velocity
     // This ensures it always ejects AWAY from the original cell
