@@ -73,6 +73,15 @@ export class GameServer {
           }
         }
         break;
+      case 'ping':
+        // Respond to ping immediately with the timestamp
+        if (client.ws.readyState === 1) { // OPEN
+          client.ws.send(JSON.stringify({
+            type: 'pong',
+            timestamp: message.timestamp
+          }));
+        }
+        break;
       case 'keybindUpdate':
         // Store keybinds client-side only, server doesn't need them
         break;

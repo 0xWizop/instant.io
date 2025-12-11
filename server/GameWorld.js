@@ -395,7 +395,7 @@ export class GameWorld {
             player.splitIntoEvenPieces(16, splitDirX, splitDirY, 0.5); // 50% impulse for virus splits
             
             // Remove and respawn virus
-            this.viruses.delete(virusId);
+              this.viruses.delete(virusId);
             this.createVirus();
           }
         });

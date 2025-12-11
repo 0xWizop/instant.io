@@ -22,9 +22,9 @@ export class Cell {
 
   updateMovement(inputDirX, inputDirY, config) {
     // Silky smooth movement: blend toward a mass-scaled target velocity
-    const BASE_SPEED = 18.0;      // Default speed for smallest cells
+    const BASE_SPEED = 12.0;      // Reduced default speed for smallest cells (was 18.0)
     const MIN_MASS = 50;          // Minimum cell mass (starting point)
-    const MASS_FACTOR = 0.0008;   // Gradual mass scaling factor (reduced for smoother transitions)
+    const MASS_FACTOR = 0.0012;   // Increased mass scaling factor for more gradual speed reduction (was 0.0008)
     const TURN_RESPONSE = 0.15;   // Lower response for smoother, more gradual turning (was 0.4)
     const ACCELERATION = 0.85;    // Higher acceleration for smoother speed changes
     const FRICTION = 0.985;       // Very low friction for smoother deceleration

@@ -582,11 +582,11 @@ export class Player {
           
           // Merge only if user allows it (cursor position relative to THIS pair) AND overlap requirement is met
           if (shouldMerge) {
-            this.instantMergeCells(cell1, cell2);
-            j--; // Adjust index after removal
+              this.instantMergeCells(cell1, cell2);
+              j--; // Adjust index after removal
           }
         }
-      }
+            }
     }
 
     // Check auto-split at 22.5k mass - find largest cell over threshold
@@ -600,7 +600,7 @@ export class Player {
     }
     
     if (cellToAutoSplit) {
-      // Auto-split into 16 even pieces
+      // Auto-split: split once into 2 cells (22.5k -> 2 cells of 11.25k each)
       const centerX = this.getCenterX();
       const centerY = this.getCenterY();
       const dx = this.cursorX - centerX;
@@ -609,8 +609,15 @@ export class Player {
       const dirX = dist > 0 ? dx / dist : 1;
       const dirY = dist > 0 ? dy / dist : 0;
       
-      // Use splitIntoEvenPieces to properly split
-      this.splitIntoEvenPieces(16, dirX, dirY, 0.6);
+      // Just split once into 2 cells (same as single split)
+      if (this.cells.length < this.getMaxCells()) {
+        const newCell = cellToAutoSplit.split(2, dirX, dirY, 1.0);
+        if (newCell) {
+          newCell.setInstantMerge(this.config.instantMerge);
+          cellToAutoSplit.setInstantMerge(this.config.instantMerge);
+          this.cells.push(newCell);
+        }
+      }
     }
   }
 

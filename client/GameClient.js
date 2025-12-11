@@ -33,7 +33,8 @@ export class GameClient {
 
     // Ping
     this.ping = 0;
-    this.lastPingTime = 0;
+    this.pingHistory = []; // Store recent ping measurements for averaging
+    this.pendingPings = new Map(); // Track pending ping requests
 
     // Zoom
     this.zoom = 1.0;
@@ -90,7 +91,11 @@ export class GameClient {
     this.backgroundLayer = new PIXI.Container();
     this.stage.addChild(this.backgroundLayer);
 
-    // Game objects layer
+    // Pellets layer (rendered first, behind cells)
+    this.pelletsLayer = new PIXI.Container();
+    this.stage.addChild(this.pelletsLayer);
+
+    // Game objects layer (cells, viruses, etc. - rendered on top of pellets)
     this.gameLayer = new PIXI.Container();
     this.stage.addChild(this.gameLayer);
 
@@ -303,6 +308,12 @@ export class GameClient {
       case 'snapshot':
         this.handleSnapshot(message);
         break;
+      case 'pong':
+        // Server responded to our ping
+        if (message.timestamp) {
+          this.handlePong(message.timestamp);
+        }
+        break;
     }
   }
 
@@ -310,14 +321,34 @@ export class GameClient {
     this.serverState = snapshot;
     this.lastSnapshotTime = Date.now();
 
-    // Update ping
-    if (this.lastPingTime > 0) {
-      this.ping = Date.now() - this.lastPingTime;
-      document.getElementById('pingValue').textContent = this.ping;
-    }
-
     // Update game entities
     this.updateEntities(snapshot);
+  }
+
+  handlePong(timestamp) {
+    // Calculate round-trip time
+    const now = Date.now();
+    const rtt = now - timestamp;
+    
+    // Only accept reasonable ping values (10ms - 500ms)
+    if (rtt >= 10 && rtt <= 500) {
+      this.pingHistory.push(rtt);
+      
+      // Keep only last 10 measurements
+      if (this.pingHistory.length > 10) {
+        this.pingHistory.shift();
+      }
+      
+      // Calculate average ping
+      const sum = this.pingHistory.reduce((a, b) => a + b, 0);
+      this.ping = Math.round(sum / this.pingHistory.length);
+      
+      // Update display
+      const pingElement = document.getElementById('pingValue');
+      if (pingElement) {
+        pingElement.textContent = this.ping;
+      }
+    }
   }
 
   setPlayerName(name) {
@@ -454,6 +485,7 @@ export class GameClient {
     
     // Ensure container is fully opaque
     container.alpha = 1.0;
+    container.blendMode = PIXI.BLEND_MODES.NORMAL; // Normal blend mode (not additive/multiply)
     
     // Create graphics for the cell circle
     const graphics = new PIXI.Graphics();
@@ -461,19 +493,20 @@ export class GameClient {
     graphics.isLocal = isLocal;
     graphics.playerName = playerName;
     graphics.alpha = 1.0; // Ensure graphics are fully opaque
+    graphics.blendMode = PIXI.BLEND_MODES.NORMAL; // Normal blend mode (not additive/multiply)
     
     container.addChild(graphics);
     
     // Create text for player name (crisp rendering, properly centered)
     // Scale text size with cell radius - more aggressive scaling for larger cells
-    const nameFontSize = Math.max(12, Math.min(radius * 0.5, 40)); // Scale more aggressively, max 40px
+    const nameFontSize = Math.max(12, Math.min(radius * 0.7, 60)); // Increased scaling (0.7x) and max size (60px)
     const nameText = new PIXI.Text(playerName || 'Player', {
       fontFamily: 'Arial',
       fontSize: nameFontSize,
       fill: 0xffffff,
       align: 'center',
       stroke: 0x000000,
-      strokeThickness: Math.max(2, Math.min(4, radius * 0.05)), // Scale stroke with size
+      strokeThickness: Math.max(2, Math.min(6, radius * 0.06)), // Increased stroke scaling
       fontWeight: 'bold',
       resolution: window.devicePixelRatio || 1, // High DPI support
       roundPixels: true // Prevent blurry text
@@ -486,14 +519,14 @@ export class GameClient {
     
     // Create text for cell mass (below name, crisp rendering, properly centered)
     // Scale text size with cell radius - more aggressive scaling for larger cells
-    const massFontSize = Math.max(10, Math.min(radius * 0.4, 32)); // Scale more aggressively, max 32px
+    const massFontSize = Math.max(10, Math.min(radius * 0.6, 50)); // Increased scaling (0.6x) and max size (50px)
     const massText = new PIXI.Text(Math.floor(cellData.mass).toString(), {
       fontFamily: 'Arial',
       fontSize: massFontSize,
       fill: 0xffffff,
       align: 'center',
       stroke: 0x000000,
-      strokeThickness: Math.max(1.5, Math.min(3, radius * 0.04)), // Scale stroke with size
+      strokeThickness: Math.max(1.5, Math.min(5, radius * 0.05)), // Increased stroke scaling
       fontWeight: 'normal',
       resolution: window.devicePixelRatio || 1, // High DPI support
       roundPixels: true // Prevent blurry text
@@ -528,9 +561,9 @@ export class GameClient {
     // Update name text - scale with cell size
     if (nameText) {
       nameText.text = playerName || 'Player';
-      const nameFontSize = Math.max(12, Math.min(radius * 0.5, 40)); // Scale more aggressively, max 40px
+      const nameFontSize = Math.max(12, Math.min(radius * 0.7, 60)); // Increased scaling (0.7x) and max size (60px)
       nameText.style.fontSize = nameFontSize;
-      nameText.style.strokeThickness = Math.max(2, Math.min(4, radius * 0.05)); // Scale stroke
+      nameText.style.strokeThickness = Math.max(2, Math.min(6, radius * 0.06)); // Increased stroke scaling
       nameText.y = Math.round(-radius * 0.12); // Better spacing, rounded for crisp rendering
       nameText.x = 0; // Ensure perfectly centered
       nameText.anchor.set(0.5, 0.5); // Ensure center anchor
@@ -541,9 +574,9 @@ export class GameClient {
     // Update mass text - scale with cell size
     if (massText) {
       massText.text = Math.floor(cellData.mass).toString();
-      const massFontSize = Math.max(10, Math.min(radius * 0.4, 32)); // Scale more aggressively, max 32px
+      const massFontSize = Math.max(10, Math.min(radius * 0.6, 50)); // Increased scaling (0.6x) and max size (50px)
       massText.style.fontSize = massFontSize;
-      massText.style.strokeThickness = Math.max(1.5, Math.min(3, radius * 0.04)); // Scale stroke
+      massText.style.strokeThickness = Math.max(1.5, Math.min(5, radius * 0.05)); // Increased stroke scaling
       massText.y = Math.round(radius * 0.12); // Better spacing, rounded for crisp rendering
       massText.x = 0; // Ensure perfectly centered
       massText.anchor.set(0.5, 0.5); // Ensure center anchor
@@ -557,6 +590,8 @@ export class GameClient {
     
     // Ensure cell is fully opaque (not translucent)
     graphics.alpha = 1.0;
+    graphics.blendMode = PIXI.BLEND_MODES.NORMAL; // Normal blend mode (not additive/multiply)
+    graphics.visible = true;
     
     // Use player's color if available, otherwise fallback to defaults
     let color, borderColor;
@@ -604,11 +639,12 @@ export class GameClient {
     graphics.y = pelletData.y;
     
     const color = this.hexToNumber(pelletData.color || '#ffffff');
-    graphics.beginFill(color);
+    graphics.beginFill(color, 1.0);
     graphics.drawCircle(0, 0, radius);
     graphics.endFill();
 
-    this.gameLayer.addChild(graphics);
+    // Add to pellets layer (rendered behind cells)
+    this.pelletsLayer.addChild(graphics);
     this.pellets.set(pelletData.id, graphics);
   }
 
@@ -621,7 +657,7 @@ export class GameClient {
     graphics.clear();
     
     const color = this.hexToNumber(pelletData.color || '#ffffff');
-    graphics.beginFill(color);
+    graphics.beginFill(color, 1.0);
     graphics.drawCircle(0, 0, radius);
     graphics.endFill();
   }
@@ -659,11 +695,12 @@ export class GameClient {
     const graphics = new PIXI.Graphics();
     graphics.pelletData = pelletData;
     
-    graphics.beginFill(0xffff00);
+    graphics.beginFill(0xffff00, 1.0);
     graphics.drawCircle(0, 0, radius);
     graphics.endFill();
 
-    this.gameLayer.addChild(graphics);
+    // Add to pellets layer (rendered behind cells)
+    this.pelletsLayer.addChild(graphics);
     this.feedPellets.set(pelletData.id, graphics);
     
     // Create visual particles showing mass coming out
@@ -687,11 +724,12 @@ export class GameClient {
         color: color,
         graphics: new PIXI.Graphics()
       };
-      particle.graphics.beginFill(color);
+      particle.graphics.beginFill(color, 1.0);
       particle.graphics.drawCircle(0, 0, particle.size);
       particle.graphics.endFill();
       particle.graphics.x = x;
       particle.graphics.y = y;
+      // Feed particles render on top of everything
       this.gameLayer.addChild(particle.graphics);
       this.feedParticles.push(particle);
     }
@@ -703,7 +741,9 @@ export class GameClient {
       particle.life -= deltaNormalized * 0.05; // Fade out over time
       
       if (particle.life <= 0) {
-        this.gameLayer.removeChild(particle.graphics);
+        if (particle.graphics.parent) {
+          particle.graphics.parent.removeChild(particle.graphics);
+        }
         particle.graphics.destroy();
         this.feedParticles.splice(i, 1);
         continue;
@@ -731,7 +771,7 @@ export class GameClient {
     const radius = this.massToRadius(pelletData.mass);
     graphics.clear();
     
-    graphics.beginFill(0xffff00);
+    graphics.beginFill(0xffff00, 1.0);
     graphics.drawCircle(0, 0, radius);
     graphics.endFill();
   }
@@ -777,7 +817,7 @@ export class GameClient {
     const pelletIds = new Set(snapshot.pellets.map(p => p.id));
     this.pellets.forEach((graphics, id) => {
       if (!pelletIds.has(id)) {
-        this.gameLayer.removeChild(graphics);
+        this.pelletsLayer.removeChild(graphics);
         this.pellets.delete(id);
       }
     });
@@ -795,7 +835,7 @@ export class GameClient {
     const feedPelletIds = new Set((snapshot.feedPellets || []).map(p => p.id));
     this.feedPellets.forEach((graphics, id) => {
       if (!feedPelletIds.has(id)) {
-        this.gameLayer.removeChild(graphics);
+        this.pelletsLayer.removeChild(graphics);
         this.feedPellets.delete(id);
       }
     });
@@ -925,9 +965,14 @@ export class GameClient {
   }
 
   startPingLoop() {
+    // Send ping every second
     setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.lastPingTime = Date.now();
+        const timestamp = Date.now();
+        this.ws.send(JSON.stringify({
+          type: 'ping',
+          timestamp: timestamp
+        }));
       }
     }, 1000);
   }
@@ -991,15 +1036,22 @@ export class GameClient {
       this.backgroundLayer.x = offsetX * this.zoom;
       this.backgroundLayer.y = offsetY * this.zoom;
       
+      // Apply same transform to pellets layer (rendered behind cells)
+      this.pelletsLayer.scale.set(this.zoom);
+      this.pelletsLayer.x = offsetX * this.zoom;
+      this.pelletsLayer.y = offsetY * this.zoom;
+      
+      // Apply transform to game layer (cells, viruses - rendered on top)
       this.gameLayer.scale.set(this.zoom);
       this.gameLayer.x = offsetX * this.zoom;
       this.gameLayer.y = offsetY * this.zoom;
     }
 
-    // Render all entities - render cells first so pellets appear on top (cells are opaque)
+    // Render all entities - cells render on top of pellets (layered rendering)
+    // Pellets are in pelletsLayer (rendered first/behind)
+    // Cells are in gameLayer (rendered on top)
     this.renderPlayers(deltaNormalized);
     this.renderViruses();
-    // Render pellets after cells so they appear on top (cells are fully opaque)
     this.renderPellets();
     this.renderFeedPellets();
     this.updateFeedParticles(deltaNormalized);

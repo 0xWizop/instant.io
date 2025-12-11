@@ -22,10 +22,26 @@ const savedName = localStorage.getItem('playerName') || 'Player';
 playerNameInput.value = savedName;
 gameClient.setPlayerName(savedName);
 
+// Update home player name display
+const homePlayerName = document.getElementById('homePlayerName');
+if (homePlayerName) {
+  homePlayerName.textContent = savedName;
+}
+
+// Update home player name when input changes
+playerNameInput.addEventListener('input', (e) => {
+  if (homePlayerName) {
+    homePlayerName.textContent = e.target.value || 'Guest';
+  }
+});
+
 function startPlaying() {
   const chosenName = playerNameInput.value.trim() || 'Player';
   localStorage.setItem('playerName', chosenName);
   gameClient.setPlayerName(chosenName);
+  if (homePlayerName) {
+    homePlayerName.textContent = chosenName;
+  }
   gameClient.setPlaying(true);
   homeScreen.classList.add('hidden');
 }
@@ -37,18 +53,18 @@ playerNameInput.addEventListener('keydown', (e) => {
   }
 });
 
-// Setup theme toggle
-const themeToggle = document.getElementById('themeToggle');
+// Setup theme toggle (moved to home section)
+const homeThemeToggle = document.getElementById('homeThemeToggle');
 let isDarkMode = localStorage.getItem('theme') !== 'light';
 
 function updateTheme() {
   if (isDarkMode) {
     document.body.classList.remove('light-mode');
-    themeToggle.textContent = '🌙 Dark Mode';
+    if (homeThemeToggle) homeThemeToggle.textContent = '🌙 Dark Mode';
     localStorage.setItem('theme', 'dark');
   } else {
     document.body.classList.add('light-mode');
-    themeToggle.textContent = '☀️ Light Mode';
+    if (homeThemeToggle) homeThemeToggle.textContent = '☀️ Light Mode';
     localStorage.setItem('theme', 'light');
   }
   gameClient.setTheme(isDarkMode);
@@ -60,20 +76,16 @@ if (localStorage.getItem('theme') === 'light') {
 }
 updateTheme();
 
-themeToggle.addEventListener('click', () => {
-  isDarkMode = !isDarkMode;
-  updateTheme();
-});
+if (homeThemeToggle) {
+  homeThemeToggle.addEventListener('click', () => {
+    isDarkMode = !isDarkMode;
+    updateTheme();
+  });
+}
 
 // Setup settings modal
-const settingsBtn = document.getElementById('settingsBtn');
 const settingsModal = document.getElementById('settingsModal');
 const closeSettings = document.getElementById('closeSettings');
-
-settingsBtn.addEventListener('click', () => {
-  settingsModal.classList.add('active');
-  keybindManager.renderKeybinds();
-});
 
 closeSettings.addEventListener('click', () => {
   settingsModal.classList.remove('active');
@@ -117,6 +129,116 @@ function updateHomeStats() {
 
 // Update stats periodically
 setInterval(updateHomeStats, 500);
+
+// Chat functionality
+const chatInput = document.getElementById('chatInput');
+const chatSendBtn = document.getElementById('chatSendBtn');
+const chatTabs = document.querySelectorAll('.chat-tab');
+const chatMessagesGlobal = document.getElementById('chatMessagesGlobal');
+const chatMessagesParty = document.getElementById('chatMessagesParty');
+
+let currentChannel = 'global';
+
+// Switch chat channels
+chatTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    const channel = tab.dataset.channel;
+    currentChannel = channel;
+    
+    // Update active tab
+    chatTabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    
+    // Show/hide message containers
+    chatMessagesGlobal.classList.toggle('active', channel === 'global');
+    chatMessagesParty.classList.toggle('active', channel === 'party');
+    
+    // Update placeholder
+    chatInput.placeholder = channel === 'global' 
+      ? 'Type a message...' 
+      : 'Type a party message...';
+  });
+});
+
+function addChatMessage(username, message, channel = currentChannel) {
+  const messagesContainer = channel === 'global' ? chatMessagesGlobal : chatMessagesParty;
+  
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'chat-message';
+  
+  const usernameSpan = document.createElement('span');
+  usernameSpan.className = 'chat-username';
+  usernameSpan.textContent = username + ':';
+  
+  const textSpan = document.createElement('span');
+  textSpan.className = 'chat-text';
+  textSpan.textContent = message;
+  
+  messageDiv.appendChild(usernameSpan);
+  messageDiv.appendChild(textSpan);
+  messagesContainer.appendChild(messageDiv);
+  
+  // Auto-scroll to bottom if this channel is active
+  if (messagesContainer.classList.contains('active')) {
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+  
+  // Limit messages to last 50 per channel
+  while (messagesContainer.children.length > 50) {
+    messagesContainer.removeChild(messagesContainer.firstChild);
+  }
+}
+
+function sendChatMessage() {
+  const message = chatInput.value.trim();
+  if (!message) return;
+  
+  const playerName = gameClient.playerName || 'Player';
+  // For now, just display locally (no server integration yet)
+  addChatMessage(playerName, message, currentChannel);
+  chatInput.value = '';
+  
+  // TODO: Send message to server when chat is integrated
+  // Should send: { type: 'chat', channel: currentChannel, message: message }
+}
+
+chatSendBtn.addEventListener('click', sendChatMessage);
+
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    sendChatMessage();
+  }
+});
+
+// Spectate button (placeholder)
+const spectateBtn = document.getElementById('spectateBtn');
+if (spectateBtn) {
+  spectateBtn.addEventListener('click', () => {
+    // TODO: Implement spectate mode
+    console.log('Spectate mode - coming soon');
+  });
+}
+
+// Login button (placeholder)
+const homeLoginBtn = document.getElementById('homeLoginBtn');
+if (homeLoginBtn) {
+  homeLoginBtn.addEventListener('click', () => {
+    // TODO: Implement login system
+    console.log('Login - coming soon');
+  });
+}
+
+// Game mode selection (placeholder)
+document.querySelectorAll('.gameMode').forEach(mode => {
+  mode.addEventListener('click', () => {
+    // Remove active class from all modes
+    document.querySelectorAll('.gameMode').forEach(m => m.classList.remove('active'));
+    // Add active class to clicked mode
+    mode.classList.add('active');
+    // TODO: Implement mode switching
+  });
+});
+
 
 // Start game
 gameClient.connect();

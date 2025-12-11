@@ -56,12 +56,12 @@ export class Bot extends Player {
       }
     } else {
       // Update target periodically (slower, more chill)
-      if (now - this.lastTargetUpdate > this.targetUpdateInterval) {
-        this.updateTarget(world);
-        this.lastTargetUpdate = now;
+    if (now - this.lastTargetUpdate > this.targetUpdateInterval) {
+      this.updateTarget(world);
+      this.lastTargetUpdate = now;
         this.targetUpdateInterval = 4000 + Math.random() * 6000; // 4-10 seconds
-      }
-      
+    }
+
       // Occasional turns for more natural movement
       if (now - this.lastTurnTime > this.turnInterval && Math.random() < this.turnChance) {
         // Make a turn - change wander angle
