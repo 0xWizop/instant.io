@@ -3,7 +3,7 @@ export class Pellet {
     this.id = id;
     this.x = x;
     this.y = y;
-    this.mass = 10 + Math.random() * 5; // 10-15 mass
+    this.mass = 5 + Math.random() * 3; // 5-8 mass (reduced for slower growth)
     this.color = this.generateColor();
   }
 

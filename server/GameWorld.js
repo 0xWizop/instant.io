@@ -87,7 +87,7 @@ export class GameWorld {
         const dy = y - virus.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const virusRadius = this.massToRadius(virus.mass);
-        const pelletRadius = this.massToRadius(15); // Pellet mass is typically 15
+        const pelletRadius = this.massToRadius(8); // Pellet mass is typically 5-8 (reduced)
         if (dist < virusRadius + pelletRadius + 10) { // 10px buffer
           validPosition = false;
           break;
@@ -330,8 +330,8 @@ export class GameWorld {
             if (this.isColliding(cell1, cell2)) {
               // Need to be 25% larger to eat (Agar.io rule)
               if (cell1.mass > cell2.mass * 1.25) {
-                // cell1 eats cell2
-                cell1.mass += cell2.mass;
+                // cell1 eats cell2 - only gain 85% of mass (15% loss for slower growth)
+                cell1.mass += cell2.mass * 0.85;
                 player2.removeCell(cell2.id);
                 
                 // If player has no cells left, they need to manually respawn
@@ -364,8 +364,8 @@ export class GameWorld {
           
           if (this.isColliding(cell, virus)) {
             // Virus always splits the cell into many pieces, regardless of size
-            // First, gain mass from the virus
-            cell.mass += virus.mass;
+            // First, gain mass from the virus - only 80% (20% loss for slower growth)
+            cell.mass += virus.mass * 0.8;
             
             // Calculate split direction: use cell's velocity direction
             const dx = cell.x - virus.x;
@@ -391,8 +391,8 @@ export class GameWorld {
               splitDirY = dirY;
             }
             
-            // Split into even-sized pieces (16 pieces) with reduced impulse for virus splits
-            player.splitIntoEvenPieces(16, splitDirX, splitDirY, 0.5); // 50% impulse for virus splits
+            // Split into even-sized pieces (16 pieces) with strong impulse for virus splits to prevent overlap
+            player.splitIntoEvenPieces(16, splitDirX, splitDirY, 1.2); // 120% impulse for virus splits - strong separation
             
             // Remove and respawn virus
               this.viruses.delete(virusId);
@@ -409,14 +409,14 @@ export class GameWorld {
               if (velLength > 0.1) {
                 const dirX = cell.vx / velLength;
                 const dirY = cell.vy / velLength;
-                player.splitIntoEvenPieces(16, dirX, dirY, 0.5); // 50% impulse for virus projectile splits
+                player.splitIntoEvenPieces(16, dirX, dirY, 1.2); // 120% impulse for virus projectile splits - strong separation
               } else {
                 // Use projectile direction (opposite of projectile velocity)
                 const projLength = Math.sqrt(projectile.vx * projectile.vx + projectile.vy * projectile.vy);
                 if (projLength > 0) {
                   const dirX = -projectile.vx / projLength;
                   const dirY = -projectile.vy / projLength;
-                  player.splitIntoEvenPieces(16, dirX, dirY, 0.5); // 50% impulse for virus projectile splits
+                  player.splitIntoEvenPieces(16, dirX, dirY, 1.2); // 120% impulse for virus projectile splits - strong separation
                 } else {
                   // Fallback: split in random direction
                   const angle = Math.random() * Math.PI * 2;

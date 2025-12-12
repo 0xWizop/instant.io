@@ -73,9 +73,20 @@ export class Player {
     
     // Enforce maximum cell count based on total mass
     const maxCells = this.getMaxCells();
-    const effectiveTargetCount = Math.min(targetCount, maxCells);
     
-    if (this.cells.length >= effectiveTargetCount) return;
+    // Always split to next power of 2 (even numbers only): 1->2->4->8->16->32
+    // Never allow odd numbers
+    let currentCount = this.cells.length;
+    let nextPowerOf2 = 1;
+    while (nextPowerOf2 <= currentCount) {
+      nextPowerOf2 *= 2;
+    }
+    
+    // Cap at max cells
+    let effectiveTargetCount = Math.min(nextPowerOf2, maxCells);
+    
+    // If we're already at max or at the target power of 2, can't split more
+    if (this.cells.length >= effectiveTargetCount || this.cells.length >= maxCells) return;
 
     // Calculate direction to cursor
     const centerX = this.getCenterX();
@@ -119,74 +130,58 @@ export class Player {
       this.splitSequence = 0;
     }
     
-    if (effectiveTargetCount === 2) {
-      // Single split - ALWAYS allow if mass is available, regardless of previous splits
-      // Only use sequence logic for RAPID consecutive splits (within 300ms)
-      if (timeSinceLastSplit < this.SPLIT_SEQUENCE_WINDOW && this.splitSequence > 0) {
-        // This is a rapid consecutive split - could be double or triple
-        this.splitSequence++;
-        if (this.splitSequence === 2) {
-          // Double split: create 4 cells in a line, border-to-border
-          this.splitIntoLine(4, dirX, dirY);
-          this.lastSplitTime = now;
-          return;
-        } else if (this.splitSequence >= 3) {
-          // Triple split: create 8 cells in a line, border-to-border
-          this.splitIntoLine(8, dirX, dirY);
-          this.splitSequence = 0; // Reset sequence
-          this.lastSplitTime = now;
-          return;
-        }
-      }
-      
-      // Normal single split - ALWAYS works if mass is available
-      // Collect all cells that can split (have enough mass)
-      const cellsToSplit = [];
-      for (const cell of this.cells) {
-        // If instant merge is enabled, always allow splits if mass >= 100
+    // Always ensure even numbers: split ALL cells to reach next power of 2
+    // This ensures: 1->2, 2->4, 4->8, 8->16, 16->32 (never odd numbers)
+    // Collect all cells that can split (have enough mass)
+    const cellsToSplit = [];
+    for (const cell of this.cells) {
+        // If instant merge is enabled, always allow splits if mass >= 300
         const canSplitNow = this.config.instantMerge ? true : cell.canSplit();
-        if (cell.mass >= 100 && canSplitNow && this.cells.length < this.getMaxCells()) {
-          cellsToSplit.push(cell);
-        }
-      }
-      
-      // Split each eligible cell in half (recursive splitting)
-      if (cellsToSplit.length > 0) {
-        for (const cell of cellsToSplit) {
-          if (this.cells.length >= this.getMaxCells()) break;
-          
-          const newCell = cell.split(2, dirX, dirY, 1.0);
-          if (newCell) {
-            newCell.setInstantMerge(this.config.instantMerge);
-            cell.setInstantMerge(this.config.instantMerge);
-            this.cells.push(newCell);
-          }
-        }
         
-        // Update sequence tracking (only for rapid splits)
-        if (timeSinceLastSplit < this.SPLIT_SEQUENCE_WINDOW) {
-          this.splitSequence = 1; // Mark as first in potential sequence
-        } else {
-          this.splitSequence = 0; // Reset if too much time passed
+        // Can split if: has enough mass (>= 300) to split in half
+        if (cell.mass >= 300 && canSplitNow) {
+        cellsToSplit.push(cell);
+      }
+    }
+    
+    // Only split if we can split ALL cells (to maintain even numbers)
+    // For 1 cell: need to split 1 -> 2
+    // For 2 cells: need to split both -> 4
+    // For 4 cells: need to split all -> 8
+    // etc.
+    if (cellsToSplit.length === this.cells.length && cellsToSplit.length > 0) {
+      // Split ALL cells in half to reach next power of 2
+      for (const cell of cellsToSplit) {
+        if (this.cells.length >= effectiveTargetCount) break;
+        
+        const newCell = cell.split(2, dirX, dirY, 1.0);
+        if (newCell) {
+          newCell.setInstantMerge(this.config.instantMerge);
+          cell.setInstantMerge(this.config.instantMerge);
+          this.cells.push(newCell);
         }
-        this.lastSplitTime = now;
       }
       
-      return;
+      this.lastSplitTime = now;
+      this.splitSequence = 0; // Reset sequence for even-number splits
     }
-
-    // For multiple splits, use the existing logic (with max cell limit)
-    this.splitWithDirection(effectiveTargetCount, dirX, dirY);
   }
 
   splitWithDirection(targetCount, dirX, dirY, impulseMultiplier = 1.0) {
     // Enforce maximum cell count based on total mass
     const maxCells = this.getMaxCells();
-    const effectiveTargetCount = Math.min(targetCount, maxCells);
+    
+    // Ensure target is always a power of 2 (even number)
+    let powerOf2 = 1;
+    while (powerOf2 < targetCount && powerOf2 < maxCells) {
+      powerOf2 *= 2;
+    }
+    const effectiveTargetCount = Math.min(powerOf2, maxCells);
     
     if (this.cells.length >= effectiveTargetCount) return;
 
-    // Perform splits until we reach target count (respecting max cell limit)
+    // For multiple splits (4, 8, 16, 32), split all cells until we reach target
+    // This ensures we always have even numbers
     while (this.cells.length < effectiveTargetCount) {
       let splitOccurred = false;
       
@@ -195,9 +190,11 @@ export class Player {
         const cell = this.cells[i];
         
         // Check if cell can split and we haven't reached max cells
-        // If instant merge is enabled, always allow splits if mass >= 100
+        // If instant merge is enabled, always allow splits if mass >= 300
         const canSplitNow = this.config.instantMerge ? true : cell.canSplit();
-        if (canSplitNow && cell.mass >= 100 && this.cells.length < effectiveTargetCount) {
+        
+        // Can split if has enough mass (>= 300) - size cap doesn't prevent splitting
+        if (cell.mass >= 300 && canSplitNow && this.cells.length < effectiveTargetCount) {
           const newCell = cell.split(effectiveTargetCount, dirX, dirY, impulseMultiplier);
           if (newCell) {
             // Set split cooldown for new cell
@@ -232,7 +229,7 @@ export class Player {
     const evenCount = cellCount === 4 ? 4 : 8; // Always 4 or 8
     const maxCells = this.getMaxCells();
     const effectiveCount = Math.min(evenCount, maxCells);
-    if (this.cells.length >= effectiveCount || largestCell.mass < 100 * effectiveCount) return;
+      if (this.cells.length >= effectiveCount || largestCell.mass < 200 * effectiveCount) return;
     
     // Calculate mass per cell - ensure perfectly even distribution
     const totalMass = largestCell.mass;
@@ -291,7 +288,7 @@ export class Player {
       let actualPieceCount;
       if (cellsToSplit.length === 1) {
         // Single cell - split into target count (16 pieces)
-        const maxPiecesFromMass = Math.floor(cell.mass / 100); // Each piece needs at least 100 mass
+        const maxPiecesFromMass = Math.floor(cell.mass / 200); // Each piece needs at least 200 mass
         actualPieceCount = Math.min(effectivePieceCount, maxPiecesFromMass);
       } else {
         // Multiple cells - distribute pieces
@@ -309,13 +306,12 @@ export class Player {
       const totalMass = cell.mass;
       const massPerPiece = totalMass / actualPieceCount;
       
-      // Create all pieces at once - place them closer together so they can merge naturally
+      // Create all pieces at once - place them far apart so they don't overlap
       for (let i = 0; i < actualPieceCount; i++) {
-        // Virus/burst splits: place pieces closer together (not in a wide circle)
-        // They should be able to merge naturally, not stuck in a circle
+        // Virus/burst splits: place pieces far apart to prevent immediate overlap
         const angle = (Math.PI * 2 * i) / actualPieceCount;
-        // Much smaller radius offset - pieces start close together
-        const baseRadiusOffset = 0.25; // Only 25% of radius - much closer together
+        // Much larger radius offset - pieces start far apart to prevent overlap
+        const baseRadiusOffset = 1.5; // 150% of radius - much further apart
         const pieceCountFactor = Math.min(actualPieceCount / 16, 1.0); // Scale down for more pieces
         const radiusOffset = baseRadiusOffset * pieceCountFactor;
         const offsetX = Math.cos(angle) * cell.getRadius() * radiusOffset;
@@ -329,18 +325,19 @@ export class Player {
           this.id
         );
         
-        // Apply minimal impulse - pieces should stay close and merge naturally
-        // Use radial direction but with very low impulse so they don't fly apart
+        // Apply strong impulse - pieces should fly apart and not overlap
+        // Use radial direction with strong impulse so they separate well
         const radialDirX = Math.cos(angle);
         const radialDirY = Math.sin(angle);
         
-        // Very low impulse - just enough to prevent initial overlap, not enough to keep them apart
-        const baseImpulseSpeed = 2.0; // Much lower base impulse
-        const impulseSpeed = baseImpulseSpeed * impulseMultiplier;
+        // Strong impulse to ensure good separation - prevent immediate overlap
+        const baseImpulseSpeed = 12.0; // Much higher base impulse for virus splits
+        const sizeFactor = Math.min(newCell.getRadius() * 0.15, 8.0); // Scale with new cell size
+        const impulseSpeed = (baseImpulseSpeed + sizeFactor) * impulseMultiplier;
         
-        // Apply minimal radial impulse - pieces will naturally come together
-        newCell.vx = radialDirX * impulseSpeed * 0.5; // Very low impulse
-        newCell.vy = radialDirY * impulseSpeed * 0.5;
+        // Apply strong radial impulse - pieces will fly apart and not overlap
+        newCell.vx = radialDirX * impulseSpeed;
+        newCell.vy = radialDirY * impulseSpeed;
         newCell.setInstantMerge(this.config.instantMerge);
         newCell.splitTime = Date.now();
         newCell.splitDirectionX = radialDirX; // Use radial direction for split tracking
@@ -363,8 +360,8 @@ export class Player {
     }
 
     // Create feed pellet
-    if (largestCell.mass > 50) {
-      const feedMass = Math.min(35, largestCell.mass * 0.1);
+    if (largestCell.mass > 200) {
+      const feedMass = Math.min(20, largestCell.mass * 0.05); // Reduced from 35/10% to 20/5%
       largestCell.mass -= feedMass;
 
       // Return feed pellet data (will be handled by world)
@@ -431,9 +428,9 @@ export class Player {
 
   getMaxCells() {
     // Calculate maximum number of cells based on total mass
-    // Each cell needs minimum 100 mass to exist
+    // Each cell needs minimum 200 mass to exist
     const totalMass = this.getTotalMass();
-    const minCellMass = 100;
+    const minCellMass = 200;
     const maxCellsByMass = Math.floor(totalMass / minCellMass);
     
     // Cap at reasonable maximum (32 cells max)
@@ -441,6 +438,25 @@ export class Player {
     
     // Also ensure at least 1 cell
     return Math.max(1, Math.min(maxCellsByMass, absoluteMax));
+  }
+
+  getMaxMassPerCell(cellCount) {
+    // Size caps based on cell count - prevents cells from getting too large
+    // Return 0 means no cap (unlimited)
+    // This encourages splitting when you have fewer cells
+    if (cellCount <= 1) {
+      return 0; // No cap for single cell
+    } else if (cellCount === 2) {
+      return 15000; // Max 15k mass per cell when you have 2 cells
+    } else if (cellCount <= 4) {
+      return 8000; // Max 8k mass per cell when you have 3-4 cells
+    } else if (cellCount <= 8) {
+      return 5000; // Max 5k mass per cell when you have 5-8 cells
+    } else if (cellCount <= 16) {
+      return 3000; // Max 3k mass per cell when you have 9-16 cells
+    } else {
+      return 2000; // Max 2k mass per cell when you have 17+ cells
+    }
   }
 
   checkMerges(config) {
@@ -466,10 +482,10 @@ export class Player {
     }
     
     // Determine merge delay based on cursor position:
-    // - Very close (within 1x avg radius): Cursor centered = quick merge (300ms)
-    // - Close (1x-2x avg radius): Medium delay (500ms) - cursor slightly away
-    // - Medium (2x-3.5x avg radius): Longer delay (800ms) - cursor away
-    // - Far (3.5x+ avg radius): Very long delay (1200ms) - cursor far away = actively hindering merge
+    // - Very close (within 1x avg radius): Cursor centered = quick merge (800ms)
+    // - Close (1x-2x avg radius): Medium delay (1200ms) - cursor slightly away
+    // - Medium (2x-3.5x avg radius): Longer delay (1800ms) - cursor away
+    // - Far (3.5x+ avg radius): Very long delay (2500ms) - cursor far away = actively hindering merge
     const veryCloseThreshold = avgRadius * 1.0;   // Cursor centered
     const closeThreshold = avgRadius * 2.0;         // Cursor slightly away
     const mediumThreshold = avgRadius * 3.5;        // Cursor away
@@ -477,14 +493,21 @@ export class Player {
     let mergeDelayMs = 0;
     if (config.instantMerge) {
       if (cursorDist <= veryCloseThreshold) {
-        mergeDelayMs = 300;    // Cursor centered = quick merge (not instant)
+        mergeDelayMs = 800;    // Cursor centered = slower merge
       } else if (cursorDist <= closeThreshold) {
-        mergeDelayMs = 500;   // Cursor slightly away = medium delay
+        mergeDelayMs = 1200;   // Cursor slightly away = medium delay
       } else if (cursorDist <= mediumThreshold) {
-        mergeDelayMs = 800;   // Cursor away = longer delay
+        mergeDelayMs = 1800;   // Cursor away = longer delay
       } else {
-        mergeDelayMs = 1200;   // Cursor far away = very long delay (hindering merge)
+        mergeDelayMs = 2500;   // Cursor far away = very long delay (hindering merge)
       }
+    }
+    
+    // Calculate average cell mass for mass-based merge delay scaling
+    let avgMass = 0;
+    if (this.cells.length > 0) {
+      const masses = this.cells.map(cell => cell.mass);
+      avgMass = masses.reduce((sum, m) => sum + m, 0) / masses.length;
     }
 
     // Process merges - iterate over actual cells array
@@ -501,7 +524,9 @@ export class Player {
         const combinedRadius = r1 + r2;
         const overlap = combinedRadius - dist;
 
-        if (overlap > 0) {
+        // Require minimum overlap before considering merge (cells must be closer together)
+        const minOverlapRequired = combinedRadius * 0.10; // Cells must overlap at least 10% before merge is considered
+        if (overlap > minOverlapRequired) {
           // Check cursor position relative to THIS SPECIFIC pair of cells FIRST
           // This allows selective merging: cursor in center of 3 small cells = merge those, keep big cell separate
           const cellMidX = (cell1.x + cell2.x) / 2;
@@ -528,7 +553,7 @@ export class Player {
           // BUT: If cursor is centered, allow merge even during cooldown (player intent is clear)
           const timeSinceSplit1 = now - cell1.splitTime;
           const timeSinceSplit2 = now - cell2.splitTime;
-          const SPLIT_MERGE_COOLDOWN = 200; // Reduced to 200ms cooldown
+          const SPLIT_MERGE_COOLDOWN = 800; // Increased to 800ms cooldown to slow merges
           const isRecentSplit1 = cell1.splitTime > 0 && timeSinceSplit1 < SPLIT_MERGE_COOLDOWN;
           const isRecentSplit2 = cell2.splitTime > 0 && timeSinceSplit2 < SPLIT_MERGE_COOLDOWN;
           const isCursorCentered = cursorToMidRatio < 0.4 || isCursorOnEitherCell; // More lenient - cursor is centered on this pair OR on either cell
@@ -549,6 +574,16 @@ export class Player {
           // Calculate overlap percentage (how much cells have merged)
           const overlapPercent = overlap / combinedRadius;
           
+          // Check if either cell was auto-split (deeper merge required)
+          const isAutoSplit1 = cell1.autoSplitTime > 0;
+          const isAutoSplit2 = cell2.autoSplitTime > 0;
+          const isAutoSplitPair = isAutoSplit1 || isAutoSplit2;
+          
+          // Calculate mass-based merge delay scaling (bigger cells = slower merges)
+          // Small increments: every 1000 mass adds ~50ms to merge delay
+          const avgCellMass = (cell1.mass + cell2.mass) / 2;
+          const massDelayBonus = Math.floor(avgCellMass / 1000) * 50; // 50ms per 1000 mass
+          
           // User-controlled merge logic for THIS specific cell pair:
           // When cursor is centered, merge should happen immediately if cells are overlapping at all
           // When cursor is away, merge should be prevented or very slow
@@ -556,28 +591,40 @@ export class Player {
           let shouldMerge = false;
           let requiredOverlap = 1.0; // Default: require 100% overlap (prevent merge)
           
-          // If cursor is on either cell or very close to center, merge immediately
+          // Base overlap requirements
+          let baseRequiredOverlap = 0.15;
           if (isCursorOnEitherCell || cursorToMidRatio < 0.25) {
-            // Cursor on cell or centered on THIS pair = player wants THESE cells to merge = merge immediately
-            // If cells are overlapping at all and cursor is centered, merge right away
-            requiredOverlap = 0.001; // Only need 0.1% overlap (instant when cursor centered/on cell)
-            shouldMerge = overlapPercent >= requiredOverlap;
+            baseRequiredOverlap = 0.15; // Need 15% overlap
           } else if (cursorToMidRatio < 0.4) {
-            // Cursor close to THIS pair = player wants quick merge
-            requiredOverlap = 0.03; // Need 3% overlap (quick merge)
-            shouldMerge = overlapPercent >= requiredOverlap;
+            baseRequiredOverlap = 0.25; // Need 25% overlap
           } else if (cursorToMidRatio < 0.65) {
-            // Cursor away from THIS pair = player neutral
-            requiredOverlap = 0.25; // Need 25% overlap (moderate)
-            shouldMerge = overlapPercent >= requiredOverlap;
+            baseRequiredOverlap = 0.45; // Need 45% overlap
           } else if (cursorToMidRatio < 1.0) {
-            // Cursor far from THIS pair = player hindering merge
-            requiredOverlap = 0.55; // Need 55% overlap (hard to merge)
-            shouldMerge = overlapPercent >= requiredOverlap;
+            baseRequiredOverlap = 0.70; // Need 70% overlap
           } else {
-            // Cursor very far from THIS pair = player actively preventing merge
-            requiredOverlap = 0.80; // Need 80% overlap (very hard, almost prevents merge)
-            shouldMerge = overlapPercent >= requiredOverlap;
+            baseRequiredOverlap = 0.90; // Need 90% overlap
+          }
+          
+          // Auto-split cells require much deeper merge (add 0.50 to required overlap for much deeper merge)
+          if (isAutoSplitPair) {
+            requiredOverlap = Math.min(1.0, baseRequiredOverlap + 0.50); // Much deeper merge for auto-split cells
+          } else {
+            requiredOverlap = baseRequiredOverlap;
+          }
+          
+          shouldMerge = overlapPercent >= requiredOverlap;
+          
+          // Apply mass-based delay: bigger cells need more time before merging
+          // Check if enough time has passed since split (mass-based cooldown)
+          if (shouldMerge && massDelayBonus > 0) {
+            const timeSinceSplit1 = now - cell1.splitTime;
+            const timeSinceSplit2 = now - cell2.splitTime;
+            const minTimeSinceSplit = Math.min(timeSinceSplit1, timeSinceSplit2);
+            
+            // Require additional delay based on mass before allowing merge
+            if (minTimeSinceSplit < massDelayBonus) {
+              shouldMerge = false; // Wait for mass-based delay
+            }
           }
           
           // Merge only if user allows it (cursor position relative to THIS pair) AND overlap requirement is met
@@ -613,6 +660,10 @@ export class Player {
       if (this.cells.length < this.getMaxCells()) {
         const newCell = cellToAutoSplit.split(2, dirX, dirY, 1.0);
         if (newCell) {
+          // Mark both cells as auto-split for deeper merge requirements
+          const now = Date.now();
+          newCell.autoSplitTime = now;
+          cellToAutoSplit.autoSplitTime = now;
           newCell.setInstantMerge(this.config.instantMerge);
           cellToAutoSplit.setInstantMerge(this.config.instantMerge);
           this.cells.push(newCell);
@@ -655,9 +706,48 @@ export class Player {
   }
 
   tick(world) {
+    // Check if cursor is centered (close to player center) - if so, bring cells together
+    const centerX = this.getCenterX();
+    const centerY = this.getCenterY();
+    const cursorDx = this.cursorX - centerX;
+    const cursorDy = this.cursorY - centerY;
+    const cursorDist = Math.sqrt(cursorDx * cursorDx + cursorDy * cursorDy);
+    
+    // Calculate average radius to determine if cursor is "centered"
+    let avgRadius = 0;
+    if (this.cells.length > 0) {
+      const radii = this.cells.map(cell => cell.getRadius());
+      avgRadius = radii.reduce((sum, r) => sum + r, 0) / radii.length;
+    }
+    
+    // If cursor is within 1.5x average radius of center, bring cells together
+    const isCursorCentered = cursorDist < avgRadius * 1.5;
+    
     // Update each cell's movement
     this.cells.forEach((cell) => {
       cell.updateMovement(this.inputDirX, this.inputDirY, world.config);
+      
+      // If cursor is centered, add attraction force toward center to bring cells together
+      if (isCursorCentered && this.cells.length > 1) {
+        const cellToCenterDx = centerX - cell.x;
+        const cellToCenterDy = centerY - cell.y;
+        const cellToCenterDist = Math.sqrt(cellToCenterDx * cellToCenterDx + cellToCenterDy * cellToCenterDy);
+        
+        if (cellToCenterDist > 0) {
+          // Normalize direction toward center
+          const dirToCenterX = cellToCenterDx / cellToCenterDist;
+          const dirToCenterY = cellToCenterDy / cellToCenterDist;
+          
+          // Apply attraction force (stronger when further from center)
+          // Scale by distance so cells closer to center aren't pulled as hard
+          const attractionStrength = Math.min(0.3, cellToCenterDist / 100); // Max 0.3, scales with distance
+          const attractionSpeed = 3.0; // Base speed for attraction
+          
+          // Add velocity toward center
+          cell.vx += dirToCenterX * attractionSpeed * attractionStrength;
+          cell.vy += dirToCenterY * attractionSpeed * attractionStrength;
+        }
+      }
     });
 
     // Update score

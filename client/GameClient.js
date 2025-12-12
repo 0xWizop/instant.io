@@ -42,6 +42,9 @@ export class GameClient {
     this.minZoom = 0.5; // Can't zoom in too much
     this.maxZoom = 2.0; // Base max zoom (will be adjusted by cell size)
     this.manualZoom = false; // Track if user manually zoomed
+    this.previousCellCount = 0; // Track cell count to detect splits
+    this.previousLargestMass = 0; // Track largest cell mass to detect auto-split
+    this.zoomTransitionTime = 0; // Time since last major zoom change
 
     // Session
     this.isPlaying = false;
@@ -498,42 +501,66 @@ export class GameClient {
     container.addChild(graphics);
     
     // Create text for player name (crisp rendering, properly centered)
-    // Scale text size with cell radius - more aggressive scaling for larger cells
-    const nameFontSize = Math.max(12, Math.min(radius * 0.7, 60)); // Increased scaling (0.7x) and max size (60px)
-    const nameText = new PIXI.Text(playerName || 'Player', {
-      fontFamily: 'Arial',
+    // Scale text size with cell radius - smaller
+    const nameFontSize = Math.max(10, Math.min(radius * 0.5, 45)); // Reduced scaling (0.5x) and max size (45px)
+    
+    // Calculate max name length based on cell width (ensure 5 letters fit at spawn)
+    const maxTextWidth = radius * 2 * 0.8; // Use 80% of cell diameter
+    const avgCharWidth = nameFontSize * 0.6; // Average character width for Arial bold
+    const maxNameLength = Math.max(5, Math.floor(maxTextWidth / avgCharWidth));
+    
+    // Truncate name if too long
+    let displayName = playerName || 'Player';
+    if (displayName.length > maxNameLength) {
+      displayName = displayName.substring(0, maxNameLength);
+    }
+    
+    const nameText = new PIXI.Text(displayName, {
+      fontFamily: '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif',
       fontSize: nameFontSize,
       fill: 0xffffff,
       align: 'center',
       stroke: 0x000000,
-      strokeThickness: Math.max(2, Math.min(6, radius * 0.06)), // Increased stroke scaling
-      fontWeight: 'bold',
-      resolution: window.devicePixelRatio || 1, // High DPI support
-      roundPixels: true // Prevent blurry text
+      strokeThickness: Math.max(3, Math.min(8, radius * 0.08)), // Thicker stroke for better readability
+      fontWeight: '700', // Bold weight
+      letterSpacing: 0.5, // Slight letter spacing for better readability
+      resolution: Math.max(2, window.devicePixelRatio || 2), // Higher resolution for crisp text
+      roundPixels: true, // Prevent blurry text
+      dropShadow: true, // Add subtle shadow
+      dropShadowColor: 0x000000,
+      dropShadowBlur: 1,
+      dropShadowAngle: Math.PI / 4,
+      dropShadowDistance: 0.5
     });
     nameText.anchor.set(0.5, 0.5); // Center anchor
     nameText.x = 0;
-    nameText.y = Math.round(-radius * 0.12); // Position name slightly above center with better spacing
+    // Position name closer to center - reduced spacing
+    const nameOffset = Math.max(radius * 0.15, nameFontSize * 0.5); // Reduced spacing
+    nameText.y = Math.round(-nameOffset);
     container.nameText = nameText;
     container.addChild(nameText);
     
     // Create text for cell mass (below name, crisp rendering, properly centered)
-    // Scale text size with cell radius - more aggressive scaling for larger cells
-    const massFontSize = Math.max(10, Math.min(radius * 0.6, 50)); // Increased scaling (0.6x) and max size (50px)
+    // Scale text size with cell radius - smaller for mass text
+    const massFontSize = Math.max(8, Math.min(radius * 0.35, 32)); // Reduced scaling (0.35x) and max size (32px)
     const massText = new PIXI.Text(Math.floor(cellData.mass).toString(), {
-      fontFamily: 'Arial',
+      fontFamily: '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif',
       fontSize: massFontSize,
       fill: 0xffffff,
       align: 'center',
       stroke: 0x000000,
-      strokeThickness: Math.max(1.5, Math.min(5, radius * 0.05)), // Increased stroke scaling
-      fontWeight: 'normal',
-      resolution: window.devicePixelRatio || 1, // High DPI support
-      roundPixels: true // Prevent blurry text
+      strokeThickness: 0, // No stroke for mass text
+      fontWeight: '600', // Semi-bold weight
+      letterSpacing: 1, // Slight letter spacing for numbers
+      resolution: Math.max(2, window.devicePixelRatio || 2), // Higher resolution for crisp text
+      roundPixels: true, // Prevent blurry text
+      dropShadow: false // No shadow for mass text
     });
     massText.anchor.set(0.5, 0.5); // Center anchor
     massText.x = 0;
-    massText.y = Math.round(radius * 0.12); // Position mass below name with proper spacing
+    // Position mass closer to center - reduced spacing from name
+    const massOffset = Math.max(radius * 0.15, massFontSize * 0.5 + nameFontSize * 0.3); // Reduced spacing
+    massText.y = Math.round(massOffset);
     container.massText = massText;
     container.addChild(massText);
     
@@ -558,13 +585,37 @@ export class GameClient {
     graphics.clear();
     this.drawCell(graphics, cellData, radius, isLocal, playerName, playerColor);
     
-    // Update name text - scale with cell size
+    // Update name text - scale with cell size and truncate to fit cell width
     if (nameText) {
-      nameText.text = playerName || 'Player';
-      const nameFontSize = Math.max(12, Math.min(radius * 0.7, 60)); // Increased scaling (0.7x) and max size (60px)
+      const nameFontSize = Math.max(10, Math.min(radius * 0.5, 45)); // Reduced scaling (0.5x) and max size (45px)
+      
+      // Calculate max name length based on cell width (ensure 5 letters fit at spawn)
+      // Cell diameter = 2 * radius, use 80% of that for text width
+      const maxTextWidth = radius * 2 * 0.8;
+      // Average character width is approximately 0.6x font size for Arial bold
+      const avgCharWidth = nameFontSize * 0.6;
+      const maxNameLength = Math.max(5, Math.floor(maxTextWidth / avgCharWidth));
+      
+      // Truncate name if too long
+      let displayName = playerName || 'Player';
+      if (displayName.length > maxNameLength) {
+        displayName = displayName.substring(0, maxNameLength);
+      }
+      
+      nameText.text = displayName;
       nameText.style.fontSize = nameFontSize;
-      nameText.style.strokeThickness = Math.max(2, Math.min(6, radius * 0.06)); // Increased stroke scaling
-      nameText.y = Math.round(-radius * 0.12); // Better spacing, rounded for crisp rendering
+      nameText.style.fontFamily = '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
+      nameText.style.fontWeight = '700';
+      nameText.style.letterSpacing = 0.5;
+      nameText.style.strokeThickness = Math.max(3, Math.min(8, radius * 0.08)); // Thicker stroke
+      nameText.style.dropShadow = true;
+      nameText.style.dropShadowColor = 0x000000;
+      nameText.style.dropShadowBlur = 1;
+      nameText.style.dropShadowDistance = 0.5;
+      nameText.style.resolution = Math.max(2, window.devicePixelRatio || 2);
+      // Position name closer to center - reduced spacing
+      const nameOffset = Math.max(radius * 0.15, nameFontSize * 0.5); // Reduced spacing
+      nameText.y = Math.round(-nameOffset);
       nameText.x = 0; // Ensure perfectly centered
       nameText.anchor.set(0.5, 0.5); // Ensure center anchor
       // Only show text if cell is large enough
@@ -574,10 +625,18 @@ export class GameClient {
     // Update mass text - scale with cell size
     if (massText) {
       massText.text = Math.floor(cellData.mass).toString();
-      const massFontSize = Math.max(10, Math.min(radius * 0.6, 50)); // Increased scaling (0.6x) and max size (50px)
+      const massFontSize = Math.max(8, Math.min(radius * 0.35, 32)); // Reduced scaling (0.35x) and max size (32px)
       massText.style.fontSize = massFontSize;
-      massText.style.strokeThickness = Math.max(1.5, Math.min(5, radius * 0.05)); // Increased stroke scaling
-      massText.y = Math.round(radius * 0.12); // Better spacing, rounded for crisp rendering
+      massText.style.fontFamily = '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
+      massText.style.fontWeight = '600';
+      massText.style.letterSpacing = 1;
+      massText.style.strokeThickness = 0; // No stroke for mass text
+      massText.style.dropShadow = false; // No shadow for mass text
+      massText.style.resolution = Math.max(2, window.devicePixelRatio || 2);
+      // Position mass closer to center - reduced spacing from name
+      const nameFontSize = nameText ? Math.max(10, Math.min(radius * 0.5, 45)) : 10;
+      const massOffset = Math.max(radius * 0.15, massFontSize * 0.5 + nameFontSize * 0.3); // Reduced spacing
+      massText.y = Math.round(massOffset);
       massText.x = 0; // Ensure perfectly centered
       massText.anchor.set(0.5, 0.5); // Ensure center anchor
       // Only show mass if cell is large enough
@@ -983,11 +1042,25 @@ export class GameClient {
     // Frame-rate independent interpolation factor (normalize to 60fps)
     const deltaNormalized = Math.min(delta / 1.0, 2.0); // Cap at 2x for stability
 
-    // Calculate camera position (follow local player)
+    // Calculate camera position (follow local player) - smooth transition to prevent glitching
     const localPlayer = this.players.get(this.playerId);
     if (localPlayer && localPlayer.data.cells.length > 0) {
-      const centerX = localPlayer.data.cells.reduce((sum, cell) => sum + cell.x, 0) / localPlayer.data.cells.length;
-      const centerY = localPlayer.data.cells.reduce((sum, cell) => sum + cell.y, 0) / localPlayer.data.cells.length;
+      const newCenterX = localPlayer.data.cells.reduce((sum, cell) => sum + cell.x, 0) / localPlayer.data.cells.length;
+      const newCenterY = localPlayer.data.cells.reduce((sum, cell) => sum + cell.y, 0) / localPlayer.data.cells.length;
+      
+      // Smooth camera position to prevent teleporting during auto-split
+      if (!this.lastCameraX) {
+        this.lastCameraX = newCenterX;
+        this.lastCameraY = newCenterY;
+      }
+      
+      // Use smoother interpolation for camera during transitions
+      const cameraSmoothing = 0.25; // Smooth camera movement
+      const centerX = this.lastCameraX + (newCenterX - this.lastCameraX) * cameraSmoothing;
+      const centerY = this.lastCameraY + (newCenterY - this.lastCameraY) * cameraSmoothing;
+      
+      this.lastCameraX = centerX;
+      this.lastCameraY = centerY;
 
       // Calculate zoom based on largest cell size
       const largestCell = localPlayer.data.cells.reduce((largest, cell) => 
@@ -996,6 +1069,16 @@ export class GameClient {
       const baseRadius = Math.sqrt(largestCell.mass / Math.PI);
       const scaleFactor = 3.5 + Math.min(largestCell.mass / 5000, 2.0);
       const cellRadius = baseRadius * scaleFactor;
+      
+      // Detect auto-split: if cell count increased and largest mass decreased significantly
+      const currentCellCount = localPlayer.data.cells.length;
+      const detectedAutoSplit = (currentCellCount > this.previousCellCount) && 
+                                (this.previousLargestMass > 0) && 
+                                (largestCell.mass < this.previousLargestMass * 0.6); // Mass dropped by 40%+
+      
+      // Update tracking
+      this.previousCellCount = currentCellCount;
+      this.previousLargestMass = largestCell.mass;
       
       // Dynamic zoom: ensure cell looks good on screen (only if user hasn't manually zoomed)
       if (!this.manualZoom) {
@@ -1008,23 +1091,35 @@ export class GameClient {
         // For larger cells, allow much more zoom out
         // Scale maxZoom based on cell size - larger cells need more zoom out capability
         const sizeMultiplier = Math.max(1.0, cellRadius / 200); // Scale up for cells > 200px radius
-        const maxZoomForSize = Math.min(8.0, 3.0 + (sizeMultiplier - 1) * 2.5); // Up to 8x zoom out for very large cells
+        const maxZoomForSize = Math.min(20.0, 3.0 + (sizeMultiplier - 1) * 4.0); // Up to 20x zoom out for very large cells
         
         // Set target zoom to ensure cell is clearly visible
-        this.targetZoom = Math.max(0.8, Math.min(maxZoomForSize, idealZoom));
-        this.maxZoom = Math.min(10.0, maxZoomForSize * 1.5); // Allow much more zoom out (up to 10x)
+        const newTargetZoom = Math.max(0.8, Math.min(maxZoomForSize, idealZoom));
+        
+        // If auto-split detected, use much slower zoom transition to prevent glitching
+        if (detectedAutoSplit) {
+          // Gradually transition zoom instead of jumping
+          this.zoomTransitionTime = Date.now();
+          // Use slower interpolation for auto-split
+          this.targetZoom = this.zoom + (newTargetZoom - this.zoom) * 0.3; // Only move 30% toward target
+        } else {
+          this.targetZoom = newTargetZoom;
+        }
+        this.maxZoom = Math.min(30.0, maxZoomForSize * 1.5); // Allow much more zoom out (up to 30x)
       } else {
         // User has manually zoomed, update maxZoom based on cell size but don't override targetZoom
         const baseViewport = Math.min(this.app.screen.width, this.app.screen.height);
         const desiredVisibleRadius = cellRadius * 3.5;
         const idealZoom = baseViewport / (desiredVisibleRadius * 2);
         const sizeMultiplier = Math.max(1.0, cellRadius / 200); // Scale up for cells > 200px radius
-        const maxZoomForSize = Math.min(8.0, 3.0 + (sizeMultiplier - 1) * 2.5); // Up to 8x zoom out for very large cells
-        this.maxZoom = Math.min(10.0, maxZoomForSize * 1.5); // Update maxZoom for bounds, allow much more zoom out (up to 10x)
+        const maxZoomForSize = Math.min(20.0, 3.0 + (sizeMultiplier - 1) * 4.0); // Up to 20x zoom out for very large cells
+        this.maxZoom = Math.min(30.0, maxZoomForSize * 1.5); // Update maxZoom for bounds, allow much more zoom out (up to 30x)
       }
 
-      // Smooth zoom interpolation
-      const zoomSpeed = 0.12;
+      // Smooth zoom interpolation - slower during auto-split transitions
+      const timeSinceTransition = Date.now() - this.zoomTransitionTime;
+      const isTransitioning = timeSinceTransition < 500; // 500ms transition period
+      const zoomSpeed = isTransitioning ? 0.05 : 0.12; // Much slower during transition
       this.zoom += (this.targetZoom - this.zoom) * zoomSpeed;
 
       // Apply camera offset with zoom

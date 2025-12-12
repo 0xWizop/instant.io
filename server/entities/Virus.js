@@ -25,7 +25,7 @@ export class Virus {
       y: this.y,
       vx: dirX * 30,
       vy: dirY * 30,
-      mass: 100
+      mass: 50 // Reduced from 100 to 50 for slower growth
     };
 
     // Reset virus

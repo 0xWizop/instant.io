@@ -325,7 +325,7 @@
       position: absolute;
       inset: 0;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
       background: rgba(0, 0, 0, 0.65);
       backdrop-filter: blur(4px);
@@ -334,6 +334,7 @@
       padding: 20px;
       gap: 20px;
       overflow-y: auto;
+      padding-top: 200px;
     }
 
     #homeScreen.hidden {
@@ -344,11 +345,12 @@
 
     .homePanel {
       background: rgba(13, 17, 23, 0.95);
-      border: 1px solid rgba(0, 255, 170, 0.15);
-      border-radius: 12px;
-      padding: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 24px;
       color: #e6f1ff;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(10px);
     }
 
     #homeLeftPanel {
@@ -368,17 +370,19 @@
 
     .homePanel h2 {
       margin: 0 0 16px 0;
-      color: #00ff00;
+      color: #e6f1ff;
       font-size: 20px;
       font-weight: 600;
+      letter-spacing: 0.5px;
     }
 
     #homeContent h1 {
       margin: 0 0 16px 0;
       color: #00ff00;
-      font-size: 32px;
-      font-weight: 600;
+      font-size: 36px;
+      font-weight: 700;
       text-align: center;
+      letter-spacing: 1px;
     }
 
     #homeContent p {
@@ -399,35 +403,36 @@
     #playerName {
       width: 100%;
       padding: 14px 16px;
-      border-radius: 8px;
-      border: 1px solid rgba(0, 255, 170, 0.3);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
       background: rgba(255, 255, 255, 0.05);
       color: white;
       font-size: 15px;
       outline: none;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
     }
 
     #playerName:focus {
       border-color: #00ff00;
       background: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 0 0 3px rgba(0, 255, 0, 0.1);
     }
 
     #playBtn {
       padding: 14px 24px;
       border: none;
-      border-radius: 8px;
+      border-radius: 10px;
       background: #00ff00;
       color: #0d1117;
       font-weight: 600;
       cursor: pointer;
       font-size: 16px;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
     }
 
     #playBtn:hover {
       background: #00cc00;
-      transform: translateY(-1px);
+      transform: translateY(-2px);
     }
 
     #playBtn:active {
@@ -441,7 +446,7 @@
       gap: 12px;
       margin-top: 16px;
       padding-top: 16px;
-      border-top: 1px solid rgba(0, 255, 170, 0.1);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
       color: #9fb3c8;
       font-size: 13px;
       flex-wrap: wrap;
@@ -460,13 +465,13 @@
       width: 80px;
       height: 80px;
       border-radius: 50%;
-      background: rgba(0, 255, 170, 0.1);
-      border: 2px solid rgba(0, 255, 170, 0.3);
+      background: rgba(255, 255, 255, 0.05);
+      border: 2px solid rgba(255, 255, 255, 0.2);
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 32px;
-      color: #00ff00;
+      color: #e6f1ff;
     }
 
     .playerName {
@@ -499,18 +504,20 @@
     .loginBtn {
       width: 100%;
       padding: 10px;
-      background: rgba(0, 255, 170, 0.1);
-      border: 1px solid rgba(0, 255, 170, 0.3);
-      border-radius: 6px;
-      color: #00ff00;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      color: #e6f1ff;
       cursor: pointer;
       font-weight: 600;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
     }
 
     .loginBtn:hover {
-      background: rgba(0, 255, 170, 0.2);
+      background: rgba(0, 255, 0, 0.1);
       border-color: #00ff00;
+      color: #00ff00;
+      transform: translateY(-1px);
     }
 
     .avatarSelector {
@@ -525,39 +532,44 @@
       width: 32px;
       height: 32px;
       border-radius: 50%;
-      background: rgba(0, 255, 170, 0.1);
-      border: 1px solid rgba(0, 255, 170, 0.3);
-      color: #00ff00;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #e6f1ff;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
     }
 
     .avatarArrow:hover {
-      background: rgba(0, 255, 170, 0.2);
+      background: rgba(0, 255, 0, 0.1);
+      border-color: #00ff00;
+      color: #00ff00;
+      transform: scale(1.1);
     }
 
     /* Game Modes Panel */
     .gameMode {
-      padding: 12px;
+      padding: 14px;
       margin: 8px 0;
-      background: rgba(0, 255, 170, 0.05);
-      border: 1px solid rgba(0, 255, 170, 0.1);
-      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
     }
 
     .gameMode:hover {
-      background: rgba(0, 255, 170, 0.1);
-      border-color: rgba(0, 255, 170, 0.3);
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.2);
+      transform: translateX(4px);
     }
 
     .gameMode.active {
-      background: rgba(0, 255, 170, 0.15);
+      background: rgba(0, 255, 0, 0.08);
       border-color: #00ff00;
+      box-shadow: 0 0 0 2px rgba(0, 255, 0, 0.15);
     }
 
     .gameModeName {
@@ -575,43 +587,46 @@
     #spectateBtn {
       width: 100%;
       padding: 14px 24px;
-      border: 2px solid #00ff00;
-      border-radius: 8px;
-      background: rgba(0, 255, 0, 0.1);
-      color: #00ff00;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      color: #e6f1ff;
       font-weight: 600;
       cursor: pointer;
       font-size: 16px;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
       margin-top: 8px;
     }
 
     #spectateBtn:hover {
-      background: rgba(0, 255, 0, 0.2);
       border-color: #00ff00;
+      background: rgba(0, 255, 0, 0.1);
+      color: #00ff00;
+      transform: translateY(-1px);
     }
 
     #homeThemeToggle {
-      background: rgba(0, 255, 170, 0.1);
-      border: 1px solid rgba(0, 255, 170, 0.3);
-      color: #00ff00;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #e6f1ff;
       padding: 8px 16px;
-      border-radius: 6px;
+      border-radius: 8px;
       cursor: pointer;
       font-size: 13px;
-      transition: all 0.2s ease;
+      transition: all 0.3s ease;
     }
 
     #homeThemeToggle:hover {
-      background: rgba(0, 255, 170, 0.2);
+      background: rgba(0, 255, 0, 0.1);
       border-color: #00ff00;
+      color: #00ff00;
     }
 
     #homeSettings {
-      color: #00ff00;
+      color: #9fb3c8;
       cursor: pointer;
       text-decoration: none;
-      transition: color 0.2s ease;
+      transition: color 0.3s ease;
     }
 
     #homeSettings:hover {
@@ -623,10 +638,11 @@
       display: flex;
       justify-content: space-around;
       margin: 20px 0;
-      padding: 16px;
-      background: rgba(0, 255, 170, 0.05);
-      border-radius: 8px;
-      border: 1px solid rgba(0, 255, 170, 0.1);
+      padding: 20px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
     }
 
     .homeStat {
@@ -635,8 +651,8 @@
 
     .homeStatValue {
       display: block;
-      font-size: 20px;
-      font-weight: 600;
+      font-size: 24px;
+      font-weight: 700;
       color: #00ff00;
       margin-bottom: 4px;
     }
@@ -683,6 +699,8 @@
     #settingsContent h2 {
       margin-bottom: 20px;
       color: #00ff00;
+      font-size: 28px;
+      font-weight: 700;
     }
 
     body.light-mode #settingsContent h2 {
@@ -712,9 +730,9 @@
       flex: 1;
       padding: 8px;
       background: rgba(0, 0, 0, 0.5);
-      border: 1px solid #00ff00;
+      border: 1px solid rgba(255, 255, 255, 0.2);
       color: white;
-      border-radius: 3px;
+      border-radius: 6px;
       cursor: pointer;
       text-align: center;
       transition: all 0.3s ease;
@@ -722,28 +740,38 @@
 
     body.light-mode .keybind-item input {
       background: rgba(255, 255, 255, 0.9);
-      border-color: #00aa00;
+      border-color: rgba(0, 0, 0, 0.2);
       color: #333;
     }
 
     .keybind-item input:focus {
       outline: none;
-      border-color: #00ffff;
+      border-color: #00ff00;
+      box-shadow: 0 0 0 3px rgba(0, 255, 0, 0.2);
     }
 
     body.light-mode .keybind-item input:focus {
-      border-color: #00cc00;
+      border-color: #00aa00;
+      box-shadow: 0 0 0 3px rgba(0, 170, 0, 0.2);
     }
 
     #closeSettings {
       margin-top: 20px;
-      padding: 10px 20px;
+      padding: 12px 24px;
       background: #00ff00;
-      color: black;
+      color: #0d1117;
       border: none;
-      border-radius: 5px;
+      border-radius: 8px;
       cursor: pointer;
-      font-weight: bold;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 14px rgba(0, 255, 0, 0.3);
+    }
+
+    #closeSettings:hover {
+      background: #00cc00;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(0, 255, 0, 0.4);
     }
   </style>
 </head>
@@ -793,7 +821,7 @@
       </div>
       <div class="avatarSelector">
         <div class="avatarArrow">‹</div>
-        <div style="width: 60px; height: 60px; border-radius: 50%; background: rgba(0, 255, 170, 0.1); border: 2px solid #00ff00; display: flex; align-items: center; justify-content: center; font-size: 24px;">👤</div>
+        <div style="width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.05); border: 2px solid rgba(255, 255, 255, 0.2); display: flex; align-items: center; justify-content: center; font-size: 24px;">👤</div>
         <div class="avatarArrow">›</div>
       </div>
     </div>

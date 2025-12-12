@@ -13,6 +13,7 @@ export class Cell {
     this.splitDirectionX = 0; // Track split direction for merge logic
     this.splitDirectionY = 0;
     this.splitTime = 0; // When this cell was split
+    this.autoSplitTime = 0; // When this cell was auto-split (0 = not auto-split)
   }
 
   setInstantMerge(enabled) {
@@ -22,8 +23,8 @@ export class Cell {
 
   updateMovement(inputDirX, inputDirY, config) {
     // Silky smooth movement: blend toward a mass-scaled target velocity
-    const BASE_SPEED = 12.0;      // Reduced default speed for smallest cells (was 18.0)
-    const MIN_MASS = 50;          // Minimum cell mass (starting point)
+    const BASE_SPEED = 7.0;      // Slower default speed for cells
+    const MIN_MASS = 200;          // Minimum cell mass (starting point) - increased for larger minimum size
     const MASS_FACTOR = 0.0012;   // Increased mass scaling factor for more gradual speed reduction (was 0.0008)
     const TURN_RESPONSE = 0.15;   // Lower response for smoother, more gradual turning (was 0.4)
     const ACCELERATION = 0.85;    // Higher acceleration for smoother speed changes
@@ -88,11 +89,11 @@ export class Cell {
 
     // Apply mass decay (only if mass is above minimum threshold)
     // Larger cells decay faster to balance pellet consumption
-    if (config.massDecayRate > 0 && this.mass > 50) {
+    if (config.massDecayRate > 0 && this.mass > 200) {
       // Base decay rate scales with mass - larger cells decay faster (but much more gradual)
       const massMultiplier = 1 + (this.mass / 5000); // Much more gradual scaling - 2x decay at 5000 mass
       const decayAmount = this.mass * config.massDecayRate * massMultiplier;
-      this.mass = Math.max(50, this.mass - decayAmount); // Minimum mass of 50
+      this.mass = Math.max(200, this.mass - decayAmount); // Minimum mass of 200 (increased from 50)
     }
 
     // Boundary clamping
@@ -122,14 +123,14 @@ export class Cell {
     // Otherwise check cooldown
     if (this.splitCooldown > 0 && !this.canSplit()) return null;
     // Always check mass requirement
-    if (this.mass < 100) return null;
+    if (this.mass < 300) return null; // Increased from 100 to 300
 
     const currentTime = Date.now();
     this.lastSplitTime = currentTime;
 
     // Calculate masses - ensure we don't go below minimum
     const oldMass = this.mass;
-    const newMass = Math.max(50, oldMass / 2); // Ensure minimum mass of 50
+    const newMass = Math.max(200, oldMass / 2); // Ensure minimum mass of 200 (increased from 50)
     const remainingMass = oldMass - newMass;
     
     // Update original cell mass
