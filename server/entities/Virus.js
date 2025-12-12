@@ -30,8 +30,8 @@ export class Virus {
 
     // Reset virus
     this.mass = 1000;
-    this.x = Math.random() * 5000;
-    this.y = Math.random() * 5000;
+    this.x = Math.random() * 8000;
+    this.y = Math.random() * 8000;
 
     return projectile;
   }
@@ -47,8 +47,8 @@ export class Virus {
 
     // Boundary clamping
     const radius = this.getRadius();
-    this.x = Math.max(radius, Math.min(5000 - radius, this.x));
-    this.y = Math.max(radius, Math.min(5000 - radius, this.y));
+    this.x = Math.max(radius, Math.min(8000 - radius, this.x));
+    this.y = Math.max(radius, Math.min(8000 - radius, this.y));
   }
 
   getRadius() {

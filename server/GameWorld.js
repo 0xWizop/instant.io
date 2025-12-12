@@ -13,8 +13,8 @@ export class GameWorld {
       virusMaxMass: 2000,
       autoSplitMass: 22500,
       massDecayRate: 0.00002, // Base decay rate (0.002% per tick, scales with mass) - much slower
-      mapWidth: 5000,
-      mapHeight: 5000,
+      mapWidth: 8000,
+      mapHeight: 8000,
       pelletCount: 1000,
       virusCount: 20,
       botCount: 10
@@ -300,7 +300,8 @@ export class GameWorld {
           if (distSq > maxDist * maxDist) return;
           
           if (this.isColliding(cell, feedPellet)) {
-            cell.mass += feedPellet.mass;
+            // Feed pellets are worth more than regular pellets (2.5x value for feeding mechanics)
+            cell.mass += feedPellet.mass * 2.5;
             this.feedPellets.delete(feedPelletId);
           }
         });
@@ -351,8 +352,12 @@ export class GameWorld {
         const cellRadius = cell.getRadius();
         const cellX = cell.x;
         const cellY = cell.y;
+        let cellHandled = false; // Flag to track if cell was handled by virus collision
         
         this.viruses.forEach((virus, virusId) => {
+          // Skip if cell was already handled
+          if (cellHandled) return;
+          
           // Early exit: check distance first
           const dx = cellX - virus.x;
           const dy = cellY - virus.y;
@@ -363,40 +368,91 @@ export class GameWorld {
           if (distSq > maxDist * maxDist) return;
           
           if (this.isColliding(cell, virus)) {
-            // Virus always splits the cell into many pieces, regardless of size
-            // First, gain mass from the virus - only 80% (20% loss for slower growth)
-            cell.mass += virus.mass * 0.8;
-            
-            // Calculate split direction: use cell's velocity direction
+            // Virus causes clean burst split - no mass gain, just split the cell
+            // Calculate split direction: radial burst from virus collision point
             const dx = cell.x - virus.x;
             const dy = cell.y - virus.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
             const dirX = dist > 0 ? dx / dist : 0;
             const dirY = dist > 0 ? dy / dist : 0;
             
-            // Use cell's velocity direction (blended with away-from-virus direction)
-            const velLength = Math.sqrt(cell.vx * cell.vx + cell.vy * cell.vy);
-            let splitDirX, splitDirY;
-            if (velLength > 0.1) {
-              const velDirX = cell.vx / velLength;
-              const velDirY = cell.vy / velLength;
-              // Blend: 70% velocity, 30% away from virus
-              const blendX = velDirX * 0.7 + dirX * 0.3;
-              const blendY = velDirY * 0.7 + dirY * 0.3;
-              const blendLen = Math.sqrt(blendX * blendX + blendY * blendY);
-              splitDirX = blendX / blendLen;
-              splitDirY = blendY / blendLen;
+            // Store the cell's position and mass before splitting (use original mass, no gain)
+            const cellX = cell.x;
+            const cellY = cell.y;
+            const cellVx = cell.vx;
+            const cellVy = cell.vy;
+            const cellId = cell.id;
+            
+            // Use original cell mass (no virus mass added)
+            const totalMass = cell.mass;
+            
+            // Remove the cell that hit the virus
+            player.removeCell(cellId);
+            
+            // Calculate how many pieces we can create (based on mass)
+            const minCellMass = 200;
+            const maxPieces = Math.floor(totalMass / minCellMass);
+            const pieceCount = Math.min(16, maxPieces, player.getMaxCells() - player.cells.length);
+            
+            if (pieceCount >= 2) {
+              // Create pieces in a circle around the virus collision point
+              const massPerPiece = totalMass / pieceCount;
+              
+              for (let i = 0; i < pieceCount; i++) {
+                const angle = (Math.PI * 2 * i) / pieceCount;
+                
+                // Calculate radius of new cell for spacing
+                const baseRadius = Math.sqrt(massPerPiece / Math.PI);
+                const scaleFactor = 4.5 + Math.min(massPerPiece / 5000, 2.5);
+                const newCellRadius = baseRadius * scaleFactor;
+                
+                // Place cells close together (60% of radius spacing)
+                const spacing = newCellRadius * 1.6; // Border-to-border spacing
+                const offsetX = Math.cos(angle) * spacing;
+                const offsetY = Math.sin(angle) * spacing;
+                
+                const newCell = new Cell(
+                  Date.now() * 1000 + Math.floor(Math.random() * 1000) + i,
+                  cellX + offsetX,
+                  cellY + offsetY,
+                  massPerPiece,
+                  player.id
+                );
+                
+                // Apply clean radial burst impulse (no speed boost, just clean separation)
+                const radialDirX = Math.cos(angle);
+                const radialDirY = Math.sin(angle);
+                const impulseSpeed = 12.0; // Clean burst impulse for virus split
+                newCell.vx = radialDirX * impulseSpeed + cellVx * 0.2; // Minimal original velocity
+                newCell.vy = radialDirY * impulseSpeed + cellVy * 0.2;
+                newCell.setInstantMerge(player.config.instantMerge);
+                newCell.splitTime = Date.now();
+                newCell.splitDirectionX = radialDirX;
+                newCell.splitDirectionY = radialDirY;
+                
+                player.cells.push(newCell);
+              }
             } else {
-              splitDirX = dirX;
-              splitDirY = dirY;
+              // Can't split enough, just keep the cell
+              const remainingCell = new Cell(
+                cellId,
+                cellX,
+                cellY,
+                totalMass,
+                player.id
+              );
+              remainingCell.vx = cellVx;
+              remainingCell.vy = cellVy;
+              remainingCell.setInstantMerge(player.config.instantMerge);
+              player.cells.push(remainingCell);
             }
             
-            // Split into even-sized pieces (16 pieces) with strong impulse for virus splits to prevent overlap
-            player.splitIntoEvenPieces(16, splitDirX, splitDirY, 1.2); // 120% impulse for virus splits - strong separation
-            
             // Remove and respawn virus
-              this.viruses.delete(virusId);
+            this.viruses.delete(virusId);
             this.createVirus();
+            
+            // Mark cell as handled to avoid processing same cell multiple times
+            cellHandled = true;
           }
         });
 
@@ -435,6 +491,9 @@ export class GameWorld {
         });
       });
     });
+
+    // Note: Feed pellets are already checked in the Player vs Feed Pellets section above
+    // This allows players to feed themselves and others with the same collision logic
 
     // Feed Pellets vs Viruses (shooting viruses)
     this.feedPellets.forEach((feedPellet, feedPelletId) => {

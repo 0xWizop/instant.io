@@ -4,4 +4,8 @@ node_modules/
 .env
 dist/
 build/
+.firebaserc
+firebase-debug.log
+firestore-debug.log
+service-account-key.json
 

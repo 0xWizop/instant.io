@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: instant-io-server
+    env: node
+    buildCommand: npm install
+    startCommand: node server/index.js
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_ENV
+        value: production

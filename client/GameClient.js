@@ -29,7 +29,7 @@ export class GameClient {
     this.inputDirX = 0;
     this.inputDirY = 0;
     this.lastInputTime = 0;
-    this.inputRate = 1000 / 60; // 60Hz to match server TPS
+    this.inputRate = 1000 / 120; // 120Hz for better cursor responsiveness (was 60Hz)
 
     // Ping
     this.ping = 0;
@@ -116,12 +116,12 @@ export class GameClient {
 
     if (!this.config) {
       // Draw default background until config is loaded
-      this.drawGridPattern(5000, 5000);
+      this.drawGridPattern(8000, 8000);
       return;
     }
 
-    const mapWidth = this.config.mapWidth || 5000;
-    const mapHeight = this.config.mapHeight || 5000;
+    const mapWidth = this.config.mapWidth || 8000;
+    const mapHeight = this.config.mapHeight || 8000;
 
     // Draw grid pattern
     this.drawGridPattern(mapWidth, mapHeight);
@@ -265,9 +265,31 @@ export class GameClient {
   }
 
   connect() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
+    // Get backend URL from config or use same host
+    // For Firebase deployment, update client/config.js with your Cloud Run URL
+    let backendUrl = window.location.host;
     
+    // Try to load config (if config.js exists)
+    if (window.BACKEND_URL) {
+      backendUrl = window.BACKEND_URL;
+    }
+    
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    
+    // If backendUrl is a full URL, use it directly; otherwise construct from current host
+    let wsUrl;
+    if (backendUrl.includes('://')) {
+      // Full URL provided
+      wsUrl = backendUrl.replace(/^https?:/, protocol === 'wss:' ? 'wss:' : 'ws:');
+    } else if (backendUrl && backendUrl !== window.location.host) {
+      // Custom hostname provided, construct URL
+      wsUrl = `${protocol}//${backendUrl}`;
+    } else {
+      // Use same host (local development)
+      wsUrl = `${protocol}//${window.location.host}`;
+    }
+    
+    console.log('Connecting to:', wsUrl);
     this.ws = new WebSocket(wsUrl);
 
     this.ws.onopen = () => {
@@ -433,7 +455,11 @@ export class GameClient {
       container.addChild(cell);
     });
     this.gameLayer.addChild(container);
-    this.players.set(playerData.id, { data: playerData, container });
+    this.players.set(playerData.id, { 
+      data: playerData, 
+      container,
+      mergeAnimations: [] // Initialize merge animations array
+    });
   }
 
   updatePlayerEntity(playerData) {
@@ -469,10 +495,57 @@ export class GameClient {
       this.updateCellGraphics(cellGraphics, cellData, isLocal, playerData.name, playerData.color);
     });
 
-    // Remove extra cells immediately (merge happens instantly, no fade needed)
-    // The smooth interpolation will handle the visual transition
-    while (player.container.children.length > playerData.cells.length) {
-      player.container.removeChildAt(player.container.children.length - 1);
+    // Handle cell removal (merges) with smooth animation
+    // Track which cells are being merged (removed)
+    const cellsToRemove = [];
+    
+    // Find cells that are being removed (merged) - cells that exist in container but not in new data
+    const existingCellIds = new Set();
+    playerData.cells.forEach((cellData) => {
+      existingCellIds.add(cellData.id);
+    });
+    
+    // Find cells to remove (not in new data)
+    for (let i = player.container.children.length - 1; i >= 0; i--) {
+      const cellGraphics = player.container.children[i];
+      const cellData = cellGraphics.children[0]?.cellData;
+      
+      if (!cellData || !existingCellIds.has(cellData.id)) {
+        // This cell is being merged - find the target cell (largest remaining cell)
+        let targetCellData = null;
+        if (playerData.cells.length > 0) {
+          // Find largest remaining cell as merge target
+          targetCellData = playerData.cells.reduce((largest, cell) => 
+            cell.mass > largest.mass ? cell : largest, playerData.cells[0]);
+        }
+        
+        // Mark for smooth merge animation
+        if (!cellGraphics.mergeAnimation && targetCellData) {
+          cellGraphics.mergeAnimation = {
+            startTime: Date.now(),
+            startScale: cellGraphics.scale.x,
+            startAlpha: cellGraphics.alpha,
+            startX: cellGraphics.x,
+            startY: cellGraphics.y,
+            targetCell: targetCellData,
+            startMass: cellData?.mass || 0
+          };
+          // Store cell data reference for animation
+          cellGraphics.cellData = cellData;
+        }
+        cellsToRemove.push(cellGraphics);
+        // Don't remove yet - keep for animation
+      }
+    }
+    
+    // Store merge animations for smooth rendering
+    if (cellsToRemove.length > 0) {
+      if (!player.mergeAnimations) player.mergeAnimations = [];
+      cellsToRemove.forEach(cell => {
+        if (cell.mergeAnimation && !player.mergeAnimations.includes(cell)) {
+          player.mergeAnimations.push(cell);
+        }
+      });
     }
 
     // Update stats for local player
@@ -501,8 +574,9 @@ export class GameClient {
     container.addChild(graphics);
     
     // Create text for player name (crisp rendering, properly centered)
-    // Scale text size with cell radius - smaller
-    const nameFontSize = Math.max(10, Math.min(radius * 0.5, 45)); // Reduced scaling (0.5x) and max size (45px)
+    // Scale text size with cell radius - better scaling for larger cells
+    // Use logarithmic scaling: smaller cells scale faster, larger cells scale slower but still grow
+    const nameFontSize = Math.max(12, Math.min(radius * 0.6, radius * 0.4 + 20)); // Better scaling that grows with cell size
     
     // Calculate max name length based on cell width (ensure 5 letters fit at spawn)
     const maxTextWidth = radius * 2 * 0.8; // Use 80% of cell diameter
@@ -541,8 +615,8 @@ export class GameClient {
     container.addChild(nameText);
     
     // Create text for cell mass (below name, crisp rendering, properly centered)
-    // Scale text size with cell radius - smaller for mass text
-    const massFontSize = Math.max(8, Math.min(radius * 0.35, 32)); // Reduced scaling (0.35x) and max size (32px)
+    // Scale text size with cell radius - better scaling for larger cells
+    const massFontSize = Math.max(10, Math.min(radius * 0.45, radius * 0.3 + 15)); // Better scaling that grows with cell size
     const massText = new PIXI.Text(Math.floor(cellData.mass).toString(), {
       fontFamily: '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif',
       fontSize: massFontSize,
@@ -587,7 +661,7 @@ export class GameClient {
     
     // Update name text - scale with cell size and truncate to fit cell width
     if (nameText) {
-      const nameFontSize = Math.max(10, Math.min(radius * 0.5, 45)); // Reduced scaling (0.5x) and max size (45px)
+      const nameFontSize = Math.max(12, Math.min(radius * 0.6, radius * 0.4 + 20)); // Better scaling that grows with cell size
       
       // Calculate max name length based on cell width (ensure 5 letters fit at spawn)
       // Cell diameter = 2 * radius, use 80% of that for text width
@@ -625,7 +699,7 @@ export class GameClient {
     // Update mass text - scale with cell size
     if (massText) {
       massText.text = Math.floor(cellData.mass).toString();
-      const massFontSize = Math.max(8, Math.min(radius * 0.35, 32)); // Reduced scaling (0.35x) and max size (32px)
+      const massFontSize = Math.max(10, Math.min(radius * 0.45, radius * 0.3 + 15)); // Better scaling that grows with cell size
       massText.style.fontSize = massFontSize;
       massText.style.fontFamily = '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
       massText.style.fontWeight = '600';
@@ -634,7 +708,7 @@ export class GameClient {
       massText.style.dropShadow = false; // No shadow for mass text
       massText.style.resolution = Math.max(2, window.devicePixelRatio || 2);
       // Position mass closer to center - reduced spacing from name
-      const nameFontSize = nameText ? Math.max(10, Math.min(radius * 0.5, 45)) : 10;
+      const nameFontSize = nameText ? Math.max(12, Math.min(radius * 0.6, radius * 0.4 + 20)) : 12;
       const massOffset = Math.max(radius * 0.15, massFontSize * 0.5 + nameFontSize * 0.3); // Reduced spacing
       massText.y = Math.round(massOffset);
       massText.x = 0; // Ensure perfectly centered
@@ -754,21 +828,30 @@ export class GameClient {
     const graphics = new PIXI.Graphics();
     graphics.pelletData = pelletData;
     
+    // Enhanced feed pellet visual - brighter yellow with glow effect
     graphics.beginFill(0xffff00, 1.0);
     graphics.drawCircle(0, 0, radius);
     graphics.endFill();
+    
+    // Add outer glow ring to show it's worth more
+    graphics.lineStyle(2, 0xffaa00, 0.8);
+    graphics.drawCircle(0, 0, radius * 1.2);
+    
+    // Add pulsing animation property
+    graphics.pulsePhase = Math.random() * Math.PI * 2;
+    graphics.baseRadius = radius;
 
     // Add to pellets layer (rendered behind cells)
     this.pelletsLayer.addChild(graphics);
     this.feedPellets.set(pelletData.id, graphics);
     
-    // Create visual particles showing mass coming out
-    this.createFeedParticles(pelletData.x, pelletData.y, pelletData.vx, pelletData.vy, 0xffff00);
+    // Create visual particles showing mass coming out (more particles for feed)
+    this.createFeedParticles(pelletData.x, pelletData.y, pelletData.vx, pelletData.vy, 0xffff00, 8);
   }
   
-  createFeedParticles(x, y, vx, vy, color) {
-    // Create 5-8 small particles that fade out
-    const particleCount = 5 + Math.floor(Math.random() * 4);
+  createFeedParticles(x, y, vx, vy, color, count = 5) {
+    // Create particles that fade out (default 5, but can specify more for feed pellets)
+    const particleCount = count + Math.floor(Math.random() * 4);
     for (let i = 0; i < particleCount; i++) {
       const angle = (Math.PI * 2 * i) / particleCount + Math.random() * 0.5;
       const speed = 2 + Math.random() * 3;
@@ -1162,8 +1245,8 @@ export class GameClient {
 
     const ctx = this.minimapCtx;
     const size = this.minimapCanvas.width;
-    const mapWidth = this.config.mapWidth || 5000;
-    const mapHeight = this.config.mapHeight || 5000;
+    const mapWidth = this.config.mapWidth || 8000;
+    const mapHeight = this.config.mapHeight || 8000;
 
     ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = this.isDarkMode ? '#0d1117' : '#f5f5f5';
@@ -1235,6 +1318,88 @@ export class GameClient {
   renderPlayers(deltaNormalized = 1.0) {
     this.players.forEach((player, playerId) => {
       const isLocal = playerId === this.playerId;
+      
+      // Handle merge animations (cells being merged)
+      if (player.mergeAnimations && player.mergeAnimations.length > 0) {
+        const now = Date.now();
+        for (let i = player.mergeAnimations.length - 1; i >= 0; i--) {
+          const mergingCell = player.mergeAnimations[i];
+          const anim = mergingCell.mergeAnimation;
+          if (!anim) {
+            player.mergeAnimations.splice(i, 1);
+            continue;
+          }
+          
+          const elapsed = now - anim.startTime;
+          const duration = 350; // 350ms merge animation (longer for smoother effect)
+          const progress = Math.min(1, elapsed / duration);
+          
+          if (progress >= 1) {
+            // Animation complete, remove
+            if (mergingCell.parent) {
+              mergingCell.parent.removeChild(mergingCell);
+            }
+            mergingCell.destroy();
+            player.mergeAnimations.splice(i, 1);
+          } else {
+            // Smooth merge animation: cells actually merge into each other
+            // Use smoother ease-in-out curve for more natural merging
+            const easeInOut = progress < 0.5 
+              ? 4 * progress * progress * progress 
+              : 1 - Math.pow(-2 * progress + 2, 4) / 2;
+            
+            if (anim.targetCell) {
+              // Calculate target position (center of target cell)
+              const targetX = anim.targetCell.x;
+              const targetY = anim.targetCell.y;
+              
+              // Move merging cell toward target (converge completely with smooth curve)
+              const dx = targetX - anim.startX;
+              const dy = targetY - anim.startY;
+              mergingCell.x = anim.startX + dx * easeInOut;
+              mergingCell.y = anim.startY + dy * easeInOut;
+              
+              // Scale merging cell down smoothly as it gets absorbed into target
+              // Use smoother curve - starts slow, accelerates, then slows at end
+              const scaleDown = 1 - easeInOut * 0.75; // Shrink to 25% as it merges
+              mergingCell.scale.set(anim.startScale * scaleDown);
+              
+              // Fade out smoothly as it merges (becomes part of target)
+              // Fade more gradually for cleaner look
+              const fadeProgress = easeInOut;
+              mergingCell.alpha = anim.startAlpha * (1 - fadeProgress * 0.95); // Fade to 5% opacity
+              
+              // Find the target cell graphics to scale up as it absorbs
+              const targetCellGraphics = Array.from(player.container.children).find(child => {
+                if (child === mergingCell || child.mergeAnimation) return false; // Skip merging cells
+                const childData = child.children[0]?.cellData;
+                if (!childData) return false;
+                // Match by ID or by position (within 10px tolerance for smoother matching)
+                return childData.id === anim.targetCell.id || 
+                       (Math.abs(childData.x - anim.targetCell.x) < 10 && 
+                        Math.abs(childData.y - anim.targetCell.y) < 10);
+              });
+              
+              if (targetCellGraphics) {
+                // Scale target cell up smoothly as it absorbs the merging cell (visual feedback)
+                // Use smoother curve that starts slow and accelerates
+                const targetScaleIncrease = easeInOut * 0.10; // Grow by 10% as it absorbs (smoother)
+                const baseScale = 1.0;
+                // Smoothly interpolate the scale increase
+                const currentScale = targetCellGraphics.scale.x || baseScale;
+                const targetScale = baseScale + targetScaleIncrease;
+                targetCellGraphics.scale.set(currentScale + (targetScale - currentScale) * 0.3);
+              }
+            } else {
+              // No target cell, just fade and shrink smoothly
+              const easeOut = 1 - Math.pow(1 - progress, 3); // Smoother cubic ease-out
+              mergingCell.scale.set(anim.startScale * (1 - easeOut * 0.65));
+              mergingCell.alpha = anim.startAlpha * (1 - easeOut);
+            }
+          }
+        }
+      }
+      
       player.data.cells.forEach((cellData, index) => {
         const cellGraphics = player.container.children[index];
         if (cellGraphics) {
@@ -1246,10 +1411,23 @@ export class GameClient {
           const dy = targetY - cellGraphics.y;
           const distance = Math.sqrt(dx * dx + dy * dy);
           
-          // Use much smoother interpolation - higher alpha for more responsive movement
-          // For new cells (splits), use even higher alpha to snap to position faster
+          // Check if this is a recently split cell (should have smooth travel time)
           const isNewCell = cellGraphics.animationTime !== undefined;
-          const alpha = isNewCell ? 0.9 : (isLocal ? 0.75 : 0.55); // Higher alpha for new cells and local player
+          const cellDataTime = cellData.splitTime || 0;
+          const now = Date.now();
+          const timeSinceSplit = now - cellDataTime;
+          const isRecentlySplit = timeSinceSplit < 600; // Consider split for 600ms after split (shorter for smoother feel)
+          
+          // For split cells, use slower interpolation to allow smooth travel time
+          // For normal cells, use faster interpolation for responsive movement
+          let alpha;
+          if (isNewCell || isRecentlySplit) {
+            // Recently split cells: slower interpolation for smooth travel (better attack timing)
+            alpha = 0.28; // Even slower interpolation - smoother, less clunky travel
+          } else {
+            // Normal cells: faster interpolation for responsive movement
+            alpha = isLocal ? 0.85 : 0.65;
+          }
           const frameAlpha = 1 - Math.pow(1 - alpha, deltaNormalized);
           
           // Apply smooth easing for very small movements (prevents jitter)
@@ -1259,21 +1437,24 @@ export class GameClient {
             interpolationFactor = 1.0;
           } else if (distance < 2) {
             // For small movements, use linear interpolation
-            interpolationFactor = Math.min(1, distance);
+            interpolationFactor = Math.min(1, distance * 0.5);
+          } else if (isRecentlySplit && distance > 15) {
+            // For split cells with large distance, use even slower interpolation for smooth travel
+            interpolationFactor = Math.min(1, frameAlpha * 0.5); // 50% slower for smoother split travel
           }
           
           // Ultra-smooth position interpolation
           cellGraphics.x += dx * interpolationFactor;
           cellGraphics.y += dy * interpolationFactor;
           
-          // Smooth scale animation for new cells (split animation) - faster and more visible
+          // Smooth scale animation for new cells (split animation) - slower and smoother
           if (cellGraphics.animationTime !== undefined) {
-            cellGraphics.animationTime += deltaNormalized * 0.12; // Faster animation (was 0.06)
+            cellGraphics.animationTime += deltaNormalized * 0.08; // Even slower animation (was 0.12) for smoother feel
             if (cellGraphics.animationTime < 1.0) {
-              // Smooth ease-out animation with bounce effect for more visible split
+              // Smooth ease-out animation - slower for smoother split animation
               const t = cellGraphics.animationTime;
-              // Use elastic ease-out for a more noticeable, smooth split animation
-              const easeOut = t < 1 ? 1 - Math.pow(1 - t, 3) * (1 - t * 0.3) : 1;
+              // Use smoother ease-out curve for less clunky feel
+              const easeOut = t < 1 ? 1 - Math.pow(1 - t, 4) : 1; // Even smoother quartic easing
               const currentScale = easeOut; // Scale from 0 to 1
               cellGraphics.scale.set(currentScale);
             } else {
@@ -1312,10 +1493,18 @@ export class GameClient {
   }
 
   renderFeedPellets() {
+    const time = Date.now() * 0.001; // Time in seconds for animation
     this.feedPellets.forEach((graphics, id) => {
       if (graphics.pelletData) {
         graphics.x = graphics.pelletData.x;
         graphics.y = graphics.pelletData.y;
+        
+        // Pulsing animation for feed pellets
+        if (graphics.baseRadius) {
+          graphics.pulsePhase = (graphics.pulsePhase || 0) + 0.1;
+          const pulseScale = 1.0 + Math.sin(graphics.pulsePhase) * 0.15;
+          graphics.scale.set(pulseScale);
+        }
       }
     });
   }

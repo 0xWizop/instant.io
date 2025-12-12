@@ -3,7 +3,16 @@ import { WebSocketServer } from 'ws';
 import { GameServer } from './GameServer.js';
 
 const PORT = process.env.PORT || 3000;
+// Render uses port 10000, Cloud Run uses PORT env var
 const app = express();
+
+// CORS headers for Firebase Hosting
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
 
 // Serve static files
 app.use(express.static('client'));

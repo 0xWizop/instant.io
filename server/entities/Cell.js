@@ -23,7 +23,7 @@ export class Cell {
 
   updateMovement(inputDirX, inputDirY, config) {
     // Silky smooth movement: blend toward a mass-scaled target velocity
-    const BASE_SPEED = 7.0;      // Slower default speed for cells
+    const BASE_SPEED = 4.5;      // Slower default speed for cells (reduced from 7.0)
     const MIN_MASS = 200;          // Minimum cell mass (starting point) - increased for larger minimum size
     const MASS_FACTOR = 0.0012;   // Increased mass scaling factor for more gradual speed reduction (was 0.0008)
     const TURN_RESPONSE = 0.15;   // Lower response for smoother, more gradual turning (was 0.4)
@@ -43,11 +43,13 @@ export class Cell {
       const dirY = inputDirY / dirLen;
 
       // Check if input opposes split direction (dot product < 0 means opposite)
+      // For split cells, allow more freedom to maintain split velocity for better travel
       let shouldDampenSplit = false;
       if (isRecentSplit && (this.splitDirectionX !== 0 || this.splitDirectionY !== 0)) {
         const dotProduct = dirX * this.splitDirectionX + dirY * this.splitDirectionY;
-        // If moving opposite to split direction or perpendicular, dampen split velocity
-        shouldDampenSplit = dotProduct < 0.3; // Less than 30% aligned with split direction
+        // If moving opposite to split direction, dampen split velocity (but less aggressively)
+        // Allow more freedom for split cells to maintain velocity for better attack timing
+        shouldDampenSplit = dotProduct < 0.1; // Less than 10% aligned (more lenient for split travel)
       }
 
       // Gradual speed formula: starts at BASE_SPEED for smallest cells, gradually decreases
@@ -66,19 +68,29 @@ export class Cell {
       // Adaptive response: faster response when far from target, slower when close
       const adaptiveResponse = Math.min(TURN_RESPONSE + (speedDiff / targetSpeed) * 0.1, ACCELERATION);
       
-      // Blend toward target velocity with adaptive response
-      this.vx = this.vx * (1 - adaptiveResponse) + targetVx * adaptiveResponse;
-      this.vy = this.vy * (1 - adaptiveResponse) + targetVy * adaptiveResponse;
+      // For split cells, blend more slowly to maintain split velocity for better travel
+      if (isRecentSplit) {
+        // Split cells: blend more slowly (50% slower) to maintain split momentum
+        const splitResponse = adaptiveResponse * 0.5; // Half the response for split cells
+        this.vx = this.vx * (1 - splitResponse) + targetVx * splitResponse;
+        this.vy = this.vy * (1 - splitResponse) + targetVy * splitResponse;
+      } else {
+        // Normal cells: blend normally
+        this.vx = this.vx * (1 - adaptiveResponse) + targetVx * adaptiveResponse;
+        this.vy = this.vy * (1 - adaptiveResponse) + targetVy * adaptiveResponse;
+      }
       
-      // If recently split and not moving in split direction, dampen split velocity quickly
+      // If recently split and not moving in split direction, dampen split velocity (but less aggressively)
       if (shouldDampenSplit) {
-        this.vx *= SPLIT_DAMPING;
-        this.vy *= SPLIT_DAMPING;
+        // Less aggressive damping for split cells to maintain travel
+        const dampingFactor = isRecentSplit ? 0.96 : SPLIT_DAMPING; // 0.96 vs 0.92 for split cells
+        this.vx *= dampingFactor;
+        this.vy *= dampingFactor;
       }
     } else {
       // No input: slowly bleed speed
-      // If recently split, bleed faster to allow quick merge
-      const friction = isRecentSplit ? SPLIT_DAMPING : FRICTION;
+      // If recently split, use less friction to allow cells to travel further (better attack timing)
+      const friction = isRecentSplit ? 0.995 : FRICTION; // Less friction for split cells (0.995 vs 0.985)
       this.vx *= friction;
       this.vy *= friction;
     }
@@ -181,9 +193,9 @@ export class Cell {
     // Split: new cell ejects FROM original cell TOWARD cursor location
     // Base impulse speed - stronger for normal splits, reduced for virus splits
     // Impulse should scale with cell size for proper separation
-    const baseImpulseSpeed = 8.5; // Increased base impulse speed for better separation
-    const sizeFactor = Math.min(oldRadius * 0.1, 5.0); // Scale with radius (larger cells = more impulse, increased)
-    const massFactor = Math.min(oldMass * 0.0012, 2.5); // Slightly increased mass factor
+    const baseImpulseSpeed = 10.0; // Increased base impulse speed for better separation and further travel
+    const sizeFactor = Math.min(oldRadius * 0.12, 6.0); // Scale with radius (larger cells = more impulse, increased)
+    const massFactor = Math.min(oldMass * 0.0015, 3.0); // Increased mass factor for more distance
     let impulseSpeed = (baseImpulseSpeed + sizeFactor + massFactor) * impulseMultiplier;
     
     // Reduce impulse for very small cells (after virus splits only)
@@ -193,16 +205,32 @@ export class Cell {
       impulseSpeed *= 0.7; // 70% impulse for small cells from virus splits
     }
 
+    // Calculate new cell radius BEFORE creating it to determine proper spacing
+    const baseRadiusNew = Math.sqrt(newMass / Math.PI);
+    const scaleFactorNew = 4.5 + Math.min(newMass / 5000, 2.5);
+    const newCellRadius = baseRadiusNew * scaleFactorNew;
+    
+    // Calculate original cell's new radius after mass reduction
+    const baseRadiusOld = Math.sqrt(this.mass / Math.PI);
+    const scaleFactorOld = 4.5 + Math.min(this.mass / 5000, 2.5);
+    const oldCellNewRadius = baseRadiusOld * scaleFactorOld;
+    
     // New cell starts with proper spacing from original cell center (in split direction)
-    // Spacing should be relative to cell size and split type:
-    // - Normal splits (attack): Much more distance (180% of radius) for long eject with clear space
-    // - Virus/burst splits (defensive): More distance (40% of radius) to prevent overlap
+    // Spacing should ensure no overlap: distance >= oldRadius + newRadius
+    // Add a proper gap to ensure cells are close but not overlapping
     const isAttackSplit = impulseMultiplier >= 0.9; // Normal splits are attacks
-    const spacingFactor = isAttackSplit ? 1.8 : 0.4; // 180% for attacks (longer eject with space), 40% for defensive
-    const ejectionOffset = oldRadius * spacingFactor;
-    const newCellX = this.x + splitDirX * ejectionOffset;
-    const newCellY = this.y + splitDirY * ejectionOffset;
-
+    const minSeparation = oldCellNewRadius + newCellRadius; // Minimum distance to prevent overlap
+    // Use larger gap factors to prevent overlap - cells should be close but clearly separated
+    const gapFactor = isAttackSplit ? 1.25 : 1.12; // 25% gap for attacks, 12% gap for defensive (prevents overlap)
+    const ejectionOffset = minSeparation * gapFactor;
+    
+    // Additional safety: ensure minimum distance is at least the sum of radii + 10% buffer
+    const minSafeDistance = (oldCellNewRadius + newCellRadius) * 1.1;
+    const finalEjectionOffset = Math.max(ejectionOffset, minSafeDistance);
+    
+    const newCellX = this.x + splitDirX * finalEjectionOffset;
+    const newCellY = this.y + splitDirY * finalEjectionOffset;
+    
     // Create new cell that will travel FROM original cell TOWARD cursor
     // Generate unique ID using timestamp and random
     const newCellId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
@@ -229,9 +257,9 @@ export class Cell {
     this.splitDirectionY = -splitDirY;
     this.splitTime = currentTime;
 
-    // New cell ejects FROM original cell TOWARD cursor with smooth, long forward velocity
-    // Attack splits need much more distance for long eject with clear space
-    const forwardMultiplier = isAttackSplit ? 5.5 : 1.8; // Even more distance for attacks (longer eject with space), more for defensive
+    // New cell ejects FROM original cell TOWARD cursor with smooth, controlled forward velocity
+    // Reduced travel distance for smoother, less clunky feel
+    const forwardMultiplier = isAttackSplit ? 4.5 : 1.8; // Reduced from 6.5/2.2 for smoother, shorter travel
     const forwardImpulse = impulseSpeed * forwardMultiplier;
     // New cell gets strong impulse in split direction (toward cursor), independent of original cell velocity
     // This ensures it always ejects AWAY from the original cell

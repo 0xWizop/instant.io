@@ -55,49 +55,66 @@ export class Bot extends Player {
         this.lastTargetUpdate = now;
       }
     } else {
-      // Update target periodically (slower, more chill)
-    if (now - this.lastTargetUpdate > this.targetUpdateInterval) {
-      this.updateTarget(world);
-      this.lastTargetUpdate = now;
-        this.targetUpdateInterval = 4000 + Math.random() * 6000; // 4-10 seconds
-    }
-
-      // Occasional turns for more natural movement
-      if (now - this.lastTurnTime > this.turnInterval && Math.random() < this.turnChance) {
-        // Make a turn - change wander angle
-        this.wanderAngle += (Math.random() - 0.5) * Math.PI; // Turn up to 90 degrees
-        this.lastTurnTime = now;
-        this.turnInterval = 3000 + Math.random() * 5000; // Next turn in 3-8 seconds
+      // Update target periodically (slower, more chill) - less frequent updates = smoother movement
+      if (now - this.lastTargetUpdate > this.targetUpdateInterval) {
+        this.updateTarget(world);
+        this.lastTargetUpdate = now;
+        this.targetUpdateInterval = 6000 + Math.random() * 8000; // 6-14 seconds (longer intervals = less spazzy)
       }
+
+      // Remove random turns - they cause spazzy back-and-forth movement
+      // Bots now move smoothly toward their target without random direction changes
     }
 
-    // Calculate direction to target with occasional wander
+    // Calculate direction to target with smooth, gradual movement (no spazzy back-and-forth)
     const dx = this.targetX - centerX;
     const dy = this.targetY - centerY;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (dist > 50) {
-      // Blend target direction with wander for more natural movement
+    // Smooth input direction changes to prevent spazzy movement
+    if (!this.lastInputDirX) {
+      this.lastInputDirX = 0;
+      this.lastInputDirY = 0;
+    }
+
+    if (dist > 100) {
+      // Calculate target direction
       const targetDirX = dx / dist;
       const targetDirY = dy / dist;
-      const wanderDirX = Math.cos(this.wanderAngle);
-      const wanderDirY = Math.sin(this.wanderAngle);
       
-      // 80% target, 20% wander for natural movement
-      const blendX = targetDirX * 0.8 + wanderDirX * 0.2;
-      const blendY = targetDirY * 0.8 + wanderDirY * 0.2;
-      const blendLen = Math.sqrt(blendX * blendX + blendY * blendY);
+      // Smoothly blend toward target direction (prevents sudden direction changes)
+      const blendFactor = 0.15; // Slow blending for smooth movement
+      this.lastInputDirX = this.lastInputDirX * (1 - blendFactor) + targetDirX * blendFactor;
+      this.lastInputDirY = this.lastInputDirY * (1 - blendFactor) + targetDirY * blendFactor;
       
-      this.inputDirX = blendLen > 0 ? blendX / blendLen : targetDirX;
-      this.inputDirY = blendLen > 0 ? blendY / blendLen : targetDirY;
+      // Normalize blended direction
+      const blendLen = Math.sqrt(this.lastInputDirX * this.lastInputDirX + this.lastInputDirY * this.lastInputDirY);
+      if (blendLen > 0) {
+        this.inputDirX = this.lastInputDirX / blendLen;
+        this.inputDirY = this.lastInputDirY / blendLen;
+      } else {
+        this.inputDirX = targetDirX;
+        this.inputDirY = targetDirY;
+      }
       
       // Reduce input strength for slower, more chill movement
-      this.inputDirX *= 0.6; // 60% speed - much slower
-      this.inputDirY *= 0.6;
+      this.inputDirX *= 0.5; // 50% speed - slower and smoother
+      this.inputDirY *= 0.5;
     } else {
-      // Close to target, slow down or stop
-      this.inputDirX = 0;
-      this.inputDirY = 0;
+      // Close to target, gradually slow down (smooth deceleration)
+      const slowFactor = 0.8; // Gradually reduce speed
+      this.lastInputDirX *= slowFactor;
+      this.lastInputDirY *= slowFactor;
+      this.inputDirX = this.lastInputDirX;
+      this.inputDirY = this.lastInputDirY;
+      
+      // Stop if very close
+      if (dist < 30) {
+        this.inputDirX = 0;
+        this.inputDirY = 0;
+        this.lastInputDirX = 0;
+        this.lastInputDirY = 0;
+      }
     }
 
     // Update cursor position (bots don't split, but keep it updated)
