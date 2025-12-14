@@ -17,9 +17,10 @@ export const PhysicsConstants = {
   SPLIT_COOLDOWN: 1000, // 1 second (disabled if instant merge)
   SPLIT_IMMUNITY_DURATION: 500, // 500ms collision immunity after split
   SPLIT_DIRECTION_LOCK_DURATION: 120, // Lock direction for 120ms after split
-  SPLIT_BASE_IMPULSE: 10.0,
-  SPLIT_FORWARD_MULTIPLIER: 4.5, // Attack splits
-  SPLIT_BACKWARD_MULTIPLIER: 0.85, // Original cell push
+  SPLIT_BASE_IMPULSE: 0.05, // Ultra slow splits - reduced from 10.0
+  SPLIT_FORWARD_MULTIPLIER: 0.03, // Ultra slow forward movement - reduced from 4.5
+  SPLIT_BACKWARD_MULTIPLIER: 0.015, // Ultra slow backward push - reduced from 0.85
+  SPLIT_NON_ATTACK_MULTIPLIER: 0.04, // Non-attack split forward multiplier (was 1.8)
   SPLIT_EJECTION_GAP: 1.25, // Gap factor to prevent overlap
   DOUBLE_SPLIT_ANGLE_OFFSET: Math.PI / 2, // 90 degrees for 4-way split
   
@@ -30,11 +31,11 @@ export const PhysicsConstants = {
   EAT_RADIUS_TWEEN_DURATION: 100, // 80-120ms radius growth tween
   
   // Merge constants
-  MERGE_DELAY_MIN: 450, // Minimum merge delay (ms) - increased for slower merges
-  MERGE_DELAY_MAX: 600, // Maximum merge delay (ms)
+  MERGE_DELAY_MIN: 1200, // Minimum merge delay (ms) - much slower merges for all split types
+  MERGE_DELAY_MAX: 1800, // Maximum merge delay (ms) - much slower merges for all split types
   MERGE_DISTANCE_THRESHOLD: 0.1, // 10% overlap required for merge
   MERGE_FORCE_THRESHOLD: 0.8, // 80% overlap forces merge regardless
-  MERGE_COOLDOWN: 300, // Merge cooldown after split (ms)
+  MERGE_COOLDOWN: 800, // Merge cooldown after split (ms) - much slower for all split types (regular, double, virus, auto-split)
   
   // Collision constants
   COLLISION_PUSH_STRENGTH: 0.8, // How strongly cells push each other apart

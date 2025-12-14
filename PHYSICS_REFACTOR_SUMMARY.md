@@ -112,3 +112,4 @@ All tests should pass:
 - Merge is **physics snap** - instant, no lerping
 - Tick order is **absolute** - eating happens AFTER overlap resolution
 
+

@@ -278,8 +278,11 @@ export class GameClient {
     // For Firebase deployment, update client/config.js with your Cloud Run URL
     let backendUrl = window.location.host;
     
-    // Try to load config (if config.js exists)
-    if (window.BACKEND_URL) {
+    // Use best region if region selector was used
+    if (window.BEST_BACKEND_URL) {
+      backendUrl = window.BEST_BACKEND_URL;
+    } else if (window.BACKEND_URL) {
+      // Fallback to single region
       backendUrl = window.BACKEND_URL;
     }
     
@@ -299,7 +302,11 @@ export class GameClient {
     }
     
     console.log('Connecting to:', wsUrl);
+    // Optimize WebSocket for low latency
     this.ws = new WebSocket(wsUrl);
+    
+    // Set binary type for potential future optimization
+    this.ws.binaryType = 'arraybuffer';
 
     this.ws.onopen = () => {
       console.log('Connected to server');
@@ -1447,42 +1454,16 @@ export class GameClient {
     this.players.forEach((player, playerId) => {
       const isLocal = playerId === this.playerId;
       
-      // Handle merge animations (cells being merged)
+      // Handle merge animations (cells being merged) - instant removal, no fade
       if (player.mergeAnimations && player.mergeAnimations.length > 0) {
-        const now = Date.now();
         for (let i = player.mergeAnimations.length - 1; i >= 0; i--) {
           const mergingCell = player.mergeAnimations[i];
-          const anim = mergingCell.mergeAnimation;
-          if (!anim) {
-            player.mergeAnimations.splice(i, 1);
-            continue;
+          // Remove immediately - no fade, no animation
+          if (mergingCell.parent) {
+            mergingCell.parent.removeChild(mergingCell);
           }
-          
-          const elapsed = now - anim.startTime;
-          const duration = 250; // 250ms merge animation (faster, more subtle)
-          const progress = Math.min(1, elapsed / duration);
-          
-          if (progress >= 1) {
-            // Animation complete, remove
-            if (mergingCell.parent) {
-              mergingCell.parent.removeChild(mergingCell);
-            }
-            mergingCell.destroy();
-            player.mergeAnimations.splice(i, 1);
-          } else {
-            // NO MOVEMENT during merge animation - just fade out to prevent shake
-            // Keep merging cell at start position (no movement = no shake)
-            mergingCell.x = anim.startX;
-            mergingCell.y = anim.startY;
-            
-            // Use simple ease-out for smooth fade
-            const easeOut = 1 - Math.pow(1 - progress, 2);
-            
-            // Just fade out - no movement, no scale change (prevents shake)
-            mergingCell.alpha = anim.startAlpha * (1 - easeOut);
-            
-            // No scale changes on target cell during merge (prevents shake)
-          }
+          mergingCell.destroy();
+          player.mergeAnimations.splice(i, 1);
         }
       }
       
@@ -1505,7 +1486,7 @@ export class GameClient {
           const cellDataTime = cellData.splitTime || 0;
           const now = Date.now();
           const timeSinceSplit = now - cellDataTime;
-          const isRecentlySplit = isInSplitTravel || (timeSinceSplit < 600 && cellDataTime > 0);
+          const isRecentlySplit = isInSplitTravel || (timeSinceSplit < 1000 && cellDataTime > 0); // Extended window for slower animation
           
           // CRITICAL: If cell just merged (large position jump), snap immediately to prevent shake
           const wasMerging = cellGraphics.wasMerging || false;
@@ -1528,7 +1509,7 @@ export class GameClient {
             let alpha;
             if (isNewCell || isRecentlySplit) {
               // Recently split cells: much smoother interpolation with easing
-              alpha = 0.15; // Slower interpolation for smoother, less direct travel
+              alpha = 0.08; // Much slower interpolation for smoother, less direct travel
             } else {
               // Normal cells: faster interpolation for responsive movement
               alpha = isLocal ? 0.85 : 0.65;
@@ -1548,7 +1529,7 @@ export class GameClient {
               // Use ease-out curve for natural deceleration feel
               const normalizedDistance = Math.min(1, distance / 50); // Normalize to 50px max
               const easeOut = 1 - Math.pow(1 - normalizedDistance, 3); // Cubic ease-out
-              interpolationFactor = Math.min(1, frameAlpha * (0.3 + easeOut * 0.4)); // 30-70% interpolation with easing
+              interpolationFactor = Math.min(1, frameAlpha * (0.15 + easeOut * 0.25)); // 15-40% interpolation with easing (slower)
             }
             
             // Ultra-smooth position interpolation

@@ -813,6 +813,23 @@ export class Player {
     
     // Update each cell's movement
     this.cells.forEach((cell) => {
+      // Check if cell just spawned (initial spawn only, not split cells) - prevent ALL movement to avoid speed boost
+      const now = Date.now();
+      const timeSinceSpawn = now - cell.spawnTime;
+      const isInSplitTravel = cell.isInState(CellState.SPLIT_TRAVEL);
+      const hasSplitTime = cell.splitTime > 0;
+      // Only apply spawn immunity to initial spawns, not split cells
+      const isRecentlySpawned = timeSinceSpawn < cell.spawnImmunityDuration && !isInSplitTravel && !hasSplitTime;
+      
+      // If recently spawned, completely prevent movement and skip all movement logic
+      if (isRecentlySpawned) {
+        // Force velocity to zero and skip all movement updates
+        cell.vx = 0;
+        cell.vy = 0;
+        return; // Skip ALL movement logic including updateMovement and cursor attraction
+      }
+      
+      // Normal movement for non-spawned cells
       cell.updateMovement(this.inputDirX, this.inputDirY, world.config);
       
       // Enhanced cursor responsiveness: cells move toward cursor position for better merge control

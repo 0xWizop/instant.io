@@ -24,6 +24,12 @@ export class GameServer {
 
       console.log(`Client connected: ${clientId}, Player: ${playerId}`);
 
+      // Optimize WebSocket for low latency
+      if (ws._socket) {
+        ws._socket.setNoDelay(true); // Disable Nagle's algorithm
+        ws._socket.setKeepAlive(true, 0); // Keep connection alive
+      }
+
       // Send initial state
       ws.send(JSON.stringify({
         type: 'init',
@@ -151,14 +157,13 @@ export class GameServer {
     
     const message = JSON.stringify(optimizedSnapshot);
 
+    // Batch send to all clients efficiently
+    const messageBuffer = Buffer.from(message);
     this.clients.forEach((client) => {
       if (client.ws.readyState === 1) { // OPEN
         try {
-          // Use noDelay for lower latency
-          if (client.ws._socket) {
-            client.ws._socket.setNoDelay(true);
-          }
-          client.ws.send(message);
+          // Send without buffering for lowest latency
+          client.ws.send(messageBuffer, { binary: false });
         } catch (e) {
           console.error('Error sending to client:', e);
         }

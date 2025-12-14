@@ -42,6 +42,10 @@ export class Cell {
     this.steerLocked = false; // Whether steering is locked during split travel
     this.autoSplitTime = 0;
     
+    // Spawn state
+    this.spawnTime = Date.now(); // Track when cell was spawned
+    this.spawnImmunityDuration = 300; // 300ms immunity from cursor attraction after spawn
+    
     // Life state
     this.isAlive = true;
     
@@ -263,10 +267,10 @@ export class Cell {
       }
     }
 
-    // Calculate impulse speed
+    // Calculate impulse speed - ultra slow splits
     const oldRadius = this.getRadius();
-    const sizeFactor = Math.min(oldRadius * 0.12, 6.0);
-    const massFactor = Math.min(oldMass * 0.0015, 3.0);
+    const sizeFactor = Math.min(oldRadius * 0.003, 0.15); // Tiny contribution
+    const massFactor = Math.min(oldMass * 0.00004, 0.08); // Tiny contribution
     let impulseSpeed = (PhysicsConstants.SPLIT_BASE_IMPULSE + sizeFactor + massFactor) * impulseMultiplier;
     
     // Calculate radii for proper spacing
@@ -303,20 +307,20 @@ export class Cell {
     // Also reduce impulse speed for smaller cells to prevent them from traveling too far
     if (newMass < 1000) {
       // Very small cells - much less impulse
-      impulseSpeed *= 0.5;
+      impulseSpeed *= 0.3;
     } else if (newMass < 2000) {
       // Small cells - reduced impulse
-      impulseSpeed *= 0.65;
+      impulseSpeed *= 0.4;
     } else if (newMass < 5000) {
       // Medium cells - slightly reduced impulse
-      impulseSpeed *= 0.8;
+      impulseSpeed *= 0.5;
     }
     
     // Reduce impulse for very small cells (virus splits)
     if (impulseMultiplier < 0.8 && newMass < 500) {
-      impulseSpeed *= 0.5;
+      impulseSpeed *= 0.3;
     } else if (impulseMultiplier < 0.8 && newMass < 1000) {
-      impulseSpeed *= 0.7;
+      impulseSpeed *= 0.4;
     }
     
     const newCellX = this.x + splitDirX * finalEjectionOffset;
@@ -331,15 +335,15 @@ export class Cell {
 
     // Original cell gets backward push
     // Reduce backward push for smaller cells to keep them closer together
-    let backwardMultiplier = isAttackSplit ? PhysicsConstants.SPLIT_BACKWARD_MULTIPLIER : 0.4;
+    let backwardMultiplier = isAttackSplit ? PhysicsConstants.SPLIT_BACKWARD_MULTIPLIER : 0.1;
     
     // Scale down backward multiplier for smaller cells
     if (newMass < 1000) {
-      backwardMultiplier *= 0.5; // Very small cells - much less backward push
+      backwardMultiplier *= 0.3; // Very small cells - much less backward push
     } else if (newMass < 2000) {
-      backwardMultiplier *= 0.65; // Small cells - reduced backward push
+      backwardMultiplier *= 0.4; // Small cells - reduced backward push
     } else if (newMass < 5000) {
-      backwardMultiplier *= 0.8; // Medium cells - slightly reduced backward push
+      backwardMultiplier *= 0.5; // Medium cells - slightly reduced backward push
     }
     
     const backwardImpulse = impulseSpeed * backwardMultiplier;
@@ -358,15 +362,15 @@ export class Cell {
 
     // New cell gets forward impulse (ballistic velocity)
     // Reduce forward multiplier for smaller cells to prevent spreading too far
-    let forwardMultiplier = isAttackSplit ? PhysicsConstants.SPLIT_FORWARD_MULTIPLIER : 1.8;
+    let forwardMultiplier = isAttackSplit ? PhysicsConstants.SPLIT_FORWARD_MULTIPLIER : PhysicsConstants.SPLIT_NON_ATTACK_MULTIPLIER;
     
     // Scale down forward multiplier for smaller cells
     if (newMass < 1000) {
-      forwardMultiplier *= 0.5; // Very small cells - much less forward push
+      forwardMultiplier *= 0.3; // Very small cells - much less forward push
     } else if (newMass < 2000) {
-      forwardMultiplier *= 0.65; // Small cells - reduced forward push
+      forwardMultiplier *= 0.4; // Small cells - reduced forward push
     } else if (newMass < 5000) {
-      forwardMultiplier *= 0.8; // Medium cells - slightly reduced forward push
+      forwardMultiplier *= 0.5; // Medium cells - slightly reduced forward push
     }
     
     const forwardImpulse = impulseSpeed * forwardMultiplier;
