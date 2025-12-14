@@ -1,4 +1,5 @@
-import { Cell } from './Cell.js';
+import { Cell, CellState } from './Cell.js';
+import { PhysicsConstants } from '../PhysicsConstants.js';
 
 export class Player {
   constructor(id, config) {
@@ -71,44 +72,127 @@ export class Player {
   split(targetCount) {
     if (this.cells.length === 0) return;
     
-    // Calculate direction to cursor
-    const centerX = this.getCenterX();
-    const centerY = this.getCenterY();
-    const dx = this.cursorX - centerX;
-    const dy = this.cursorY - centerY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    
-    // Ensure we have a valid direction - use velocity as fallback if cursor is at center
-    let dirX, dirY;
-    if (dist > 1) {
-      dirX = dx / dist;
-      dirY = dy / dist;
-    } else {
-      // Cursor is at center or not set - use velocity direction or random
-      if (this.cells.length > 0) {
-        const cell = this.cells[0];
-        const velLength = Math.sqrt(cell.vx * cell.vx + cell.vy * cell.vy);
-        if (velLength > 0.1) {
-          dirX = cell.vx / velLength;
-          dirY = cell.vy / velLength;
-        } else {
-          // Random direction if no velocity
-          const angle = Math.random() * Math.PI * 2;
-          dirX = Math.cos(angle);
-          dirY = Math.sin(angle);
-        }
-      } else {
-        const angle = Math.random() * Math.PI * 2;
-        dirX = Math.cos(angle);
-        dirY = Math.sin(angle);
-      }
+    // For double split (4-way), use special logic
+    if (targetCount === 4) {
+      this.performDoubleSplit();
+      return;
     }
     
-    // Use the unified split method
-    this.splitToTargetCount(targetCount, dirX, dirY, 1.0);
+    // For single split, get fresh direction vector from cursor
+    // ALWAYS use fresh direction - never reuse previous vectors
+    const dirX = this.getFreshSplitDirection();
+    if (!dirX) return; // No valid direction
+    
+    // Use the unified split method with fresh direction
+    this.splitToTargetCount(targetCount, dirX.dirX, dirX.dirY, 1.0);
     
     this.lastSplitTime = Date.now();
     this.splitSequence = 0;
+  }
+  
+  getFreshSplitDirection() {
+    // Calculate direction from largest cell to cursor (fresh vector every time)
+    if (this.cells.length === 0) return null;
+    
+    // Find largest cell
+    let largestCell = this.cells[0];
+    for (const cell of this.cells) {
+      if (cell.mass > largestCell.mass) {
+        largestCell = cell;
+      }
+    }
+    
+    // Fresh direction: normalize(mousePosition - cell.position)
+    const dx = this.cursorX - largestCell.x;
+    const dy = this.cursorY - largestCell.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    
+    if (dist > 1) {
+      return { dirX: dx / dist, dirY: dy / dist };
+    } else {
+      // Fallback to velocity or random
+      const velLength = Math.sqrt(largestCell.vx * largestCell.vx + largestCell.vy * largestCell.vy);
+      if (velLength > 0.1) {
+        return { dirX: largestCell.vx / velLength, dirY: largestCell.vy / velLength };
+      } else {
+        const angle = Math.random() * Math.PI * 2;
+        return { dirX: Math.cos(angle), dirY: Math.sin(angle) };
+      }
+    }
+  }
+  
+  performDoubleSplit() {
+    // Double split: 4-way burst from original parent cell
+    if (this.cells.length === 0) return;
+    
+    // Find largest cell (will be the parent)
+    let largestCell = this.cells[0];
+    for (const cell of this.cells) {
+      if (cell.mass > largestCell.mass) {
+        largestCell = cell;
+      }
+    }
+    
+    // Get fresh forward direction
+    const forwardDir = this.getFreshSplitDirection();
+    if (!forwardDir) return;
+    
+    // Calculate 4 directions: forward, +90°, -90°, backward
+    const D1 = { x: forwardDir.dirX, y: forwardDir.dirY }; // Forward
+    const D2 = { x: -D1.y, y: D1.x }; // Rotate +90°
+    const D3 = { x: D1.y, y: -D1.x }; // Rotate -90°
+    const D4 = { x: -D1.x, y: -D1.y }; // Backward
+    
+    const directions = [D1, D2, D3, D4];
+    
+    // Check if we can split (need enough mass for 4 cells)
+    const totalMass = largestCell.mass;
+    const minCellMass = PhysicsConstants.MIN_MASS;
+    if (totalMass < minCellMass * 4) return;
+    if (this.cells.length >= this.getMaxCells()) return;
+    
+    // Remove original cell
+    this.cells = this.cells.filter(c => c.id !== largestCell.id);
+    
+    // Create 4 cells with equal mass
+    const massPerCell = totalMass / 4;
+    const currentTime = Date.now();
+    
+    for (let i = 0; i < 4 && this.cells.length < this.getMaxCells(); i++) {
+      const dir = directions[i];
+      const newCellId = Date.now() * 1000 + Math.floor(Math.random() * 1000) + i;
+      
+      // Calculate ejection offset (same for all cells)
+      const tempCell = new Cell(0, 0, 0, massPerCell, this.id);
+      const newCellRadius = tempCell.getRadius();
+      const oldRadius = largestCell.getRadius();
+      const minSeparation = oldRadius + newCellRadius;
+      const ejectionOffset = minSeparation * PhysicsConstants.SPLIT_EJECTION_GAP;
+      
+      const newCellX = largestCell.x + dir.x * ejectionOffset;
+      const newCellY = largestCell.y + dir.y * ejectionOffset;
+      
+      const newCell = new Cell(newCellId, newCellX, newCellY, massPerCell, this.id);
+      newCell.setInstantMerge(this.config.instantMerge);
+      newCell.setState(CellState.SPLIT_TRAVEL);
+      newCell.splitImmunityUntil = currentTime + PhysicsConstants.SPLIT_IMMUNITY_DURATION;
+      newCell.splitDirectionLockUntil = currentTime + PhysicsConstants.SPLIT_DIRECTION_LOCK_DURATION;
+      
+      // Apply impulse (same for all cells)
+      const baseImpulseSpeed = PhysicsConstants.SPLIT_BASE_IMPULSE;
+      const sizeFactor = Math.min(oldRadius * 0.12, 6.0);
+      const massFactor = Math.min(totalMass * 0.0015, 3.0);
+      const impulseSpeed = (baseImpulseSpeed + sizeFactor + massFactor) * PhysicsConstants.SPLIT_FORWARD_MULTIPLIER;
+      
+      newCell.vx = dir.x * impulseSpeed;
+      newCell.vy = dir.y * impulseSpeed;
+      newCell.lastSplitTime = currentTime;
+      newCell.splitDirectionX = dir.x;
+      newCell.splitDirectionY = dir.y;
+      newCell.splitTime = currentTime;
+      
+      this.cells.push(newCell);
+    }
   }
   
   splitToTargetCount(targetCount, dirX, dirY, impulseMultiplier = 1.0) {
@@ -119,25 +203,23 @@ export class Player {
     
     // Calculate total mass BEFORE splitting to ensure even distribution
     const totalMass = this.getTotalMass();
-    const minCellMass = 200; // Minimum mass per cell
+    const minCellMass = PhysicsConstants.MIN_MASS;
     
     // Check if we can split at all - need at least 2 cells worth of mass
     if (totalMass < minCellMass * 2) {
       return; // Not enough mass to split
     }
     
-    // Check if ALL cells can split (have enough mass individually)
-    // For even splitting, each cell needs at least 300 mass to split in half
-    let allCellsCanSplit = true;
-    for (const cell of this.cells) {
-      const canSplitNow = this.config.instantMerge ? true : cell.canSplit();
-      if (cell.mass < 300 || !canSplitNow) {
-        allCellsCanSplit = false;
-        break;
-      }
-    }
+    // Sort cells by mass DESC (largest first) - split largest cells first
+    const sortedCells = [...this.cells].sort((a, b) => b.mass - a.mass);
     
-    if (!allCellsCanSplit) return;
+    // Check if eligible cells can split (have enough mass individually)
+    const eligibleCells = sortedCells.filter(cell => {
+      const canSplitNow = this.config.instantMerge ? true : cell.canSplit();
+      return cell.mass >= PhysicsConstants.SPLIT_MIN_MASS && canSplitNow;
+    });
+    
+    if (eligibleCells.length === 0) return;
     
     // Calculate how many cells we can actually create based on total mass
     const maxAffordableCells = Math.floor(totalMass / minCellMass);
@@ -159,8 +241,8 @@ export class Player {
       // Can still split more - calculate next power of 2
       let nextTarget = this.cells.length * 2;
       if (nextTarget <= actualMaxCells) {
-        // Split once to double the cell count
-        this.performSingleSplitIteration(dirX, dirY, impulseMultiplier, actualMaxCells);
+        // Split once to double the cell count (largest cells first)
+        this.performSingleSplitIteration(dirX, dirY, impulseMultiplier, actualMaxCells, eligibleCells);
         // Redistribute mass after split
         this.redistributeMassEvenly(totalMass, minCellMass);
         return;
@@ -173,9 +255,15 @@ export class Player {
     const targetMultiplier = effectiveTargetCount / currentCount;
     const iterationsNeeded = Math.ceil(Math.log2(targetMultiplier));
     
-    // Perform all split iterations: split ALL cells simultaneously in each iteration
+    // Perform all split iterations: split ALL eligible cells simultaneously in each iteration
     for (let iteration = 0; iteration < iterationsNeeded && this.cells.length < effectiveTargetCount && this.cells.length < actualMaxCells; iteration++) {
-      this.performSingleSplitIteration(dirX, dirY, impulseMultiplier, actualMaxCells);
+      // Re-sort and get eligible cells for each iteration
+      const currentEligible = this.cells.filter(cell => {
+        const canSplitNow = this.config.instantMerge ? true : cell.canSplit();
+        return cell.mass >= PhysicsConstants.SPLIT_MIN_MASS && canSplitNow;
+      }).sort((a, b) => b.mass - a.mass);
+      
+      this.performSingleSplitIteration(dirX, dirY, impulseMultiplier, actualMaxCells, currentEligible);
       
       // If we hit maxCells, stop splitting
       if (this.cells.length >= actualMaxCells) break;
@@ -185,14 +273,33 @@ export class Player {
     this.redistributeMassEvenly(totalMass, minCellMass);
   }
   
-  performSingleSplitIteration(dirX, dirY, impulseMultiplier, maxCells) {
+  performSingleSplitIteration(dirX, dirY, impulseMultiplier, maxCells, eligibleCells = null) {
     const newCells = [];
-    const currentCellCount = this.cells.length;
     
-    // Split each existing cell once (all at the same time)
-    for (let i = 0; i < currentCellCount && this.cells.length + newCells.length < maxCells; i++) {
-      const cell = this.cells[i];
-      const newCell = cell.split(2, dirX, dirY, impulseMultiplier);
+    // Use provided eligible cells (sorted by mass DESC) or all cells
+    const cellsToSplit = eligibleCells || this.cells;
+    
+    // Split each eligible cell once (all at the same time)
+    // Use FRESH direction vector for each cell (from cell position to cursor)
+    for (let i = 0; i < cellsToSplit.length && this.cells.length + newCells.length < maxCells; i++) {
+      const cell = cellsToSplit[i];
+      
+      // Get fresh direction for THIS cell (never reuse previous vectors)
+      const cellDx = this.cursorX - cell.x;
+      const cellDy = this.cursorY - cell.y;
+      const cellDist = Math.sqrt(cellDx * cellDx + cellDy * cellDy);
+      
+      let freshDirX, freshDirY;
+      if (cellDist > 1) {
+        freshDirX = cellDx / cellDist;
+        freshDirY = cellDy / cellDist;
+      } else {
+        // Fallback to provided direction or velocity
+        freshDirX = dirX;
+        freshDirY = dirY;
+      }
+      
+      const newCell = cell.split(2, freshDirX, freshDirY, impulseMultiplier);
       if (newCell) {
         newCell.setInstantMerge(this.config.instantMerge);
         cell.setInstantMerge(this.config.instantMerge);
@@ -249,7 +356,7 @@ export class Player {
     const evenCount = cellCount === 4 ? 4 : 8; // Always 4 or 8
     const maxCells = this.getMaxCells();
     const effectiveCount = Math.min(evenCount, maxCells);
-      if (this.cells.length >= effectiveCount || largestCell.mass < 200 * effectiveCount) return;
+      if (this.cells.length >= effectiveCount || largestCell.mass < PhysicsConstants.MIN_MASS * effectiveCount) return;
     
     // Calculate mass per cell - ensure perfectly even distribution
     const totalMass = largestCell.mass;
@@ -299,7 +406,7 @@ export class Player {
     
     // Calculate total mass BEFORE splitting to ensure even distribution
     const totalMass = this.getTotalMass();
-    const minCellMass = 200; // Minimum mass per cell
+    const minCellMass = PhysicsConstants.MIN_MASS;
     
     // Check if we have enough total mass to split into target count
     const requiredMass = effectivePieceCount * minCellMass;
@@ -329,7 +436,7 @@ export class Player {
     
     // Calculate even mass per cell
     const massPerCell = totalMass / pieceCount;
-    const minCellMass = 200;
+    const minCellMass = PhysicsConstants.MIN_MASS;
     const finalMassPerCell = Math.max(minCellMass, massPerCell);
     
     // Distribute cells across the split pieces
@@ -349,18 +456,14 @@ export class Player {
       // Create pieces from this cell
       // Calculate the radius of the new cells directly (same formula as Cell.getRadius())
       const baseRadius = Math.sqrt(finalMassPerCell / Math.PI);
-      const scaleFactor = 4.5 + Math.min(finalMassPerCell / 5000, 2.5);
+      const scaleFactor = PhysicsConstants.RADIUS_BASE_SCALE + Math.min(finalMassPerCell / PhysicsConstants.RADIUS_SCALE_MASS, PhysicsConstants.RADIUS_MAX_SCALE);
       const newCellRadius = baseRadius * scaleFactor;
       
       for (let i = 0; i < piecesForThisCell && pieceIndex < pieceCount; i++) {
         const angle = (Math.PI * 2 * pieceIndex) / pieceCount;
         // Reduced spacing: cells should be close together, not form empty circle
-        // Use new cell radius for spacing, and place them closer (0.6x = 60% of radius)
-        // This ensures cells are border-to-border or slightly overlapping, not far apart
         const baseRadiusOffset = 0.6; // Much closer spacing (60% of new cell radius)
-        const radiusOffset = baseRadiusOffset;
-        // Calculate spacing based on new cell size, not old cell size
-        const spacing = newCellRadius * (1 + radiusOffset); // Distance from center to cell edge
+        const spacing = newCellRadius * (1 + baseRadiusOffset); // Distance from center to cell edge
         const offsetX = Math.cos(angle) * spacing;
         const offsetY = Math.sin(angle) * spacing;
         
@@ -415,7 +518,7 @@ export class Player {
     }
 
     // Create feed pellet
-    if (largestCell.mass > 200) {
+    if (largestCell.mass > PhysicsConstants.MIN_MASS) {
       const feedMass = Math.min(20, largestCell.mass * 0.05); // Reduced from 35/10% to 20/5%
       largestCell.mass -= feedMass;
 
@@ -451,6 +554,11 @@ export class Player {
   }
 
   removeCell(cellId) {
+    // Mark cell as not alive before removing
+    const cell = this.cells.find(c => c.id === cellId);
+    if (cell) {
+      cell.isAlive = false;
+    }
     this.cells = this.cells.filter((cell) => cell.id !== cellId);
     // Don't auto-respawn - let player manually respawn
   }
@@ -485,7 +593,7 @@ export class Player {
     // Calculate maximum number of cells based on total mass
     // Each cell needs minimum 200 mass to exist
     const totalMass = this.getTotalMass();
-    const minCellMass = 200;
+    const minCellMass = PhysicsConstants.MIN_MASS;
     const maxCellsByMass = Math.floor(totalMass / minCellMass);
     
     // Cap at reasonable maximum (32 cells max)
@@ -518,50 +626,6 @@ export class Player {
     if (this.cells.length <= 1) return;
 
     const now = Date.now();
-    const mergeDelay = config.instantMerge ? 0 : config.mergeDelayMS;
-
-    // Calculate player center for cursor-based merge prevention
-    const centerX = this.getCenterX();
-    const centerY = this.getCenterY();
-    const cursorDx = this.cursorX - centerX;
-    const cursorDy = this.cursorY - centerY;
-    const cursorDist = Math.sqrt(cursorDx * cursorDx + cursorDy * cursorDy);
-    
-    // Cursor-based merge control logic:
-    // - Cursor centered (close to player center) = player wants quick merge = instant merge
-    // - Cursor away from center = player trying to hinder merge = delay merge
-    let avgRadius = 0;
-    if (this.cells.length > 0) {
-      const radii = this.cells.map(cell => cell.getRadius());
-      avgRadius = radii.reduce((sum, r) => sum + r, 0) / radii.length;
-    }
-    
-    // When instantMerge is enabled, NO delays - merges are truly instant
-    // Cursor position only affects overlap requirements, not delays
-    let mergeDelayMs = 0;
-    if (!config.instantMerge) {
-      // Only apply delays if instantMerge is disabled
-      const veryCloseThreshold = avgRadius * 1.0;
-      const closeThreshold = avgRadius * 2.0;
-      const mediumThreshold = avgRadius * 3.5;
-      
-      if (cursorDist <= veryCloseThreshold) {
-        mergeDelayMs = 800;
-      } else if (cursorDist <= closeThreshold) {
-        mergeDelayMs = 1200;
-      } else if (cursorDist <= mediumThreshold) {
-        mergeDelayMs = 1800;
-      } else {
-        mergeDelayMs = 2500;
-      }
-    }
-    
-    // Calculate average cell mass for mass-based merge delay scaling
-    let avgMass = 0;
-    if (this.cells.length > 0) {
-      const masses = this.cells.map(cell => cell.mass);
-      avgMass = masses.reduce((sum, m) => sum + m, 0) / masses.length;
-    }
 
     // Process merges - iterate over actual cells array
     for (let i = 0; i < this.cells.length; i++) {
@@ -569,140 +633,83 @@ export class Player {
         const cell1 = this.cells[i];
         const cell2 = this.cells[j];
 
+        // MERGE CONDITIONS (ALL must be true):
+        // 1. Same owner
+        if (cell1.ownerId !== cell2.ownerId) {
+          continue;
+        }
+        
+        // 2. Merge cooldown <= 0 (300-500ms after split)
+        const now = Date.now();
+        const timeSinceSplit1 = now - cell1.splitTime;
+        const timeSinceSplit2 = now - cell2.splitTime;
+        if (timeSinceSplit1 < PhysicsConstants.MERGE_COOLDOWN || timeSinceSplit2 < PhysicsConstants.MERGE_COOLDOWN) {
+          continue;
+        }
+        
+        // 3. Skip if either cell has split immunity
+        if (cell1.hasSplitImmunity() || cell2.hasSplitImmunity()) {
+          continue;
+        }
+
+        // 4. Distance check - distance < mergeRadius
         const dx = cell1.x - cell2.x;
         const dy = cell1.y - cell2.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const distance = Math.sqrt(dx * dx + dy * dy);
         const r1 = cell1.getRadius();
         const r2 = cell2.getRadius();
-        const combinedRadius = r1 + r2;
-        const overlap = combinedRadius - dist;
-
-        // ANY overlap should trigger merge check - cells should never fully overlap
-        // Check if cells are overlapping at all (distance < sum of radii)
-        if (overlap > 0) {
-          // Check cursor position relative to THIS SPECIFIC pair of cells FIRST
-          // This allows selective merging: cursor in center of 3 small cells = merge those, keep big cell separate
-          const cellMidX = (cell1.x + cell2.x) / 2;
-          const cellMidY = (cell1.y + cell2.y) / 2;
-          const cursorToMidDx = this.cursorX - cellMidX;
-          const cursorToMidDy = this.cursorY - cellMidY;
-          const cursorToMidDist = Math.sqrt(cursorToMidDx * cursorToMidDx + cursorToMidDy * cursorToMidDy);
+        const mergeRadius = (r1 + r2) * 0.9; // Merge when 90% overlapping (10% gap)
+        
+        if (distance < mergeRadius) {
+          // Check if cells are already merging
+          const isMerging1 = cell1.isInState(CellState.MERGING);
+          const isMerging2 = cell2.isInState(CellState.MERGING);
           
-          // Also check if cursor is on either cell (more lenient check)
-          const cursorToCell1Dx = this.cursorX - cell1.x;
-          const cursorToCell1Dy = this.cursorY - cell1.y;
-          const cursorToCell1Dist = Math.sqrt(cursorToCell1Dx * cursorToCell1Dx + cursorToCell1Dy * cursorToCell1Dy);
-          const cursorToCell2Dx = this.cursorX - cell2.x;
-          const cursorToCell2Dy = this.cursorY - cell2.y;
-          const cursorToCell2Dist = Math.sqrt(cursorToCell2Dx * cursorToCell2Dx + cursorToCell2Dy * cursorToCell2Dy);
-          // More responsive cursor detection - skill-based merge control
-          const isCursorOnCell1 = cursorToCell1Dist < r1 * 1.5; // Cursor within 150% of cell1 radius (more lenient)
-          const isCursorOnCell2 = cursorToCell2Dist < r2 * 1.5; // Cursor within 150% of cell2 radius (more lenient)
-          const isCursorOnEitherCell = isCursorOnCell1 || isCursorOnCell2;
-          
-          // Cursor position relative to THIS pair's midpoint determines merge
-          const cursorToMidRatio = cursorToMidDist / combinedRadius;
-          
-          // Minimal cooldown only to prevent instant re-merge after split (only if instantMerge disabled)
-          // When instantMerge is enabled, allow immediate merges after split (skill-based)
-          const timeSinceSplit1 = now - cell1.splitTime;
-          const timeSinceSplit2 = now - cell2.splitTime;
-          const SPLIT_MERGE_COOLDOWN = config.instantMerge ? 50 : 800; // Even shorter cooldown (50ms vs 100ms) for skilled players
-          const isRecentSplit1 = cell1.splitTime > 0 && timeSinceSplit1 < SPLIT_MERGE_COOLDOWN;
-          const isRecentSplit2 = cell2.splitTime > 0 && timeSinceSplit2 < SPLIT_MERGE_COOLDOWN;
-          // More lenient cursor centered check - skill-based: better cursor placement = faster merges
-          const isCursorCentered = cursorToMidRatio < 0.5 || isCursorOnEitherCell; // Increased from 0.4 to 0.5
-          
-          // If instantMerge is enabled OR cursor is centered, allow merge even after split
-          if (config.instantMerge || isCursorCentered) {
-            // Instant merge mode or cursor centered = allow immediate merge
-            // Continue to merge logic below
-          } else if ((isRecentSplit1 || isRecentSplit2)) {
-            // Only apply separation requirement if instantMerge is disabled and cursor not centered
-            const minSeparation = Math.max(r1, r2) * 0.2;
-            if (dist < minSeparation) {
-              continue; // Too close, can't merge yet
-            }
-          }
-          
-          // User-controlled merges: cursor position is PRIMARY control for EACH cell pair
-          // Calculate overlap percentage (how much cells have merged)
-          const overlapPercent = overlap / combinedRadius;
-          
-          // Check if either cell was auto-split (slightly deeper merge for auto-split cells)
-          const isAutoSplit1 = cell1.autoSplitTime > 0;
-          const isAutoSplit2 = cell2.autoSplitTime > 0;
-          const isAutoSplitPair = isAutoSplit1 || isAutoSplit2;
-          
-          // User-controlled merge logic for THIS specific cell pair:
-          // When instantMerge is enabled, merges happen with minimal overlap requirements
-          // When cursor is centered, merge should happen immediately if cells are overlapping at all
-          
-          let shouldMerge = false;
-          let requiredOverlap = 1.0; // Default: require 100% overlap (prevent merge)
-          
-          // ANY overlap should cause merge - cells should never fully overlap
-          // Cursor position controls merge speed, but any overlap triggers merge check
-          // Skill-based: better cursor placement = instant merge, poor placement = slight delay
-          let baseRequiredOverlap;
-          if (config.instantMerge) {
-            // Instant merge mode: merge immediately on any overlap when cursor is well-placed
-            // Skill gap: cursor placement determines merge speed
-            if (isCursorOnEitherCell || cursorToMidRatio < 0.2) {
-              baseRequiredOverlap = 0.0; // Merge immediately on any overlap when cursor is perfectly centered (skill reward)
-            } else if (cursorToMidRatio < 0.3) {
-              baseRequiredOverlap = 0.01; // Need only 1% overlap when cursor is very close
-            } else if (cursorToMidRatio < 0.45) {
-              baseRequiredOverlap = 0.02; // Need 2% overlap when cursor is close
-            } else if (cursorToMidRatio < 0.65) {
-              baseRequiredOverlap = 0.05; // Need 5% overlap when cursor is medium distance
-            } else if (cursorToMidRatio < 1.0) {
-              baseRequiredOverlap = 0.10; // Need 10% overlap when cursor is far
-            } else {
-              baseRequiredOverlap = 0.20; // Need 20% overlap (cursor very far away - skill penalty)
-            }
-          } else {
-            // Classic merge mode: still merge on overlap, but with higher requirements
-            if (isCursorOnEitherCell || cursorToMidRatio < 0.25) {
-              baseRequiredOverlap = 0.05; // Need 5% overlap when cursor is centered
-            } else if (cursorToMidRatio < 0.4) {
-              baseRequiredOverlap = 0.10; // Need 10% overlap
-            } else if (cursorToMidRatio < 0.65) {
-              baseRequiredOverlap = 0.20; // Need 20% overlap
-            } else if (cursorToMidRatio < 1.0) {
-              baseRequiredOverlap = 0.40; // Need 40% overlap
-            } else {
-              baseRequiredOverlap = 0.60; // Need 60% overlap
-            }
-          }
-          
-          // Auto-split cells require slightly deeper merge (only if instantMerge disabled)
-          if (isAutoSplitPair && !config.instantMerge) {
-            requiredOverlap = Math.min(1.0, baseRequiredOverlap + 0.20); // Deeper merge for auto-split cells (classic mode only)
-          } else if (isAutoSplitPair && config.instantMerge) {
-            requiredOverlap = Math.min(1.0, baseRequiredOverlap + 0.05); // Slightly deeper for auto-split (instant mode)
-          } else {
-            requiredOverlap = baseRequiredOverlap;
-          }
-          
-          // Merge if overlap meets requirement - prevents full overlap
-          shouldMerge = overlapPercent >= requiredOverlap;
-          
-          // Safety check: if cells are heavily overlapping (>80%), force merge regardless of cursor
-          // This prevents cells from fully overlapping
-          if (overlapPercent > 0.80) {
-            shouldMerge = true; // Force merge to prevent full overlap
-          }
-          
-          // No mass-based delays when instantMerge is enabled - merges are truly instant
-          
-          // Merge only if user allows it (cursor position relative to THIS pair) AND overlap requirement is met
-          if (shouldMerge) {
-              this.instantMergeCells(cell1, cell2);
+          if (isMerging1 || isMerging2) {
+            // One cell is already merging - check if merge should complete
+            const mergingCell = isMerging1 ? cell1 : cell2;
+            if (mergingCell.mergeStartTime && now - mergingCell.mergeStartTime >= PhysicsConstants.MERGE_DELAY_MIN) {
+              // Merge timer has passed - complete the merge (physics snap)
+              this.completeMerge(cell1, cell2);
               j--; // Adjust index after removal
+              continue;
+            }
+          } else {
+            // Start merge process
+            cell1.setState(CellState.MERGE_READY);
+            cell2.setState(CellState.MERGE_READY);
+            cell1.mergeTargetId = cell2.id;
+            cell2.mergeTargetId = cell1.id;
+            cell1.mergeStartTime = now;
+            cell2.mergeStartTime = now;
+            
+            // If instant merge, merge immediately (physics snap)
+            if (config.instantMerge) {
+              this.completeMerge(cell1, cell2);
+              j--; // Adjust index after removal
+              continue;
+            } else {
+              // Start merge timer - cells will merge after delay
+              cell1.setState(CellState.MERGING);
+              cell2.setState(CellState.MERGING);
+            }
+          }
+        } else {
+          // Cells are not overlapping - clear merge state if set
+          if (cell1.mergeTargetId === cell2.id || cell2.mergeTargetId === cell1.id) {
+            cell1.mergeTargetId = null;
+            cell2.mergeTargetId = null;
+            cell1.mergeStartTime = null;
+            cell2.mergeStartTime = null;
+            if (cell1.isInState(CellState.MERGE_READY) || cell1.isInState(CellState.MERGING)) {
+              cell1.setState(cell1.vx !== 0 || cell1.vy !== 0 ? CellState.MOVING : CellState.IDLE);
+            }
+            if (cell2.isInState(CellState.MERGE_READY) || cell2.isInState(CellState.MERGING)) {
+              cell2.setState(cell2.vx !== 0 || cell2.vy !== 0 ? CellState.MOVING : CellState.IDLE);
+            }
           }
         }
-            }
+      }
     }
 
     // Check auto-split at 22.5k mass - find largest cell over threshold
@@ -741,37 +748,49 @@ export class Player {
     }
   }
 
-  instantMergeCells(cell1, cell2) {
-    // Instant merge with proper physics
+  completeMerge(cell1, cell2) {
+    // MERGE IS A PHYSICS SNAP - NOT ANIMATION DRIVEN
+    // Calculate weighted center of mass
     const totalMass = cell1.mass + cell2.mass;
     const massRatio1 = cell1.mass / totalMass;
     const massRatio2 = cell2.mass / totalMass;
 
-    // Calculate center of mass position
-    const centerX = cell1.x * massRatio1 + cell2.x * massRatio2;
-    const centerY = cell1.y * massRatio1 + cell2.y * massRatio2;
+    // New position = weighted center of mass
+    const newPosX = cell1.x * massRatio1 + cell2.x * massRatio2;
+    const newPosY = cell1.y * massRatio1 + cell2.y * massRatio2;
 
-    // Calculate momentum-preserving velocity
-    const totalMomentumX = cell1.vx * cell1.mass + cell2.vx * cell2.mass;
-    const totalMomentumY = cell1.vy * cell1.mass + cell2.vy * cell2.mass;
-    const mergedVx = totalMomentumX / totalMass;
-    const mergedVy = totalMomentumY / totalMass;
+    // New mass = sum of masses
+    const newMass = totalMass;
 
-    // Merge into cell1
-    cell1.mass = totalMass;
-    cell1.x = centerX;
-    cell1.y = centerY;
-    cell1.vx = mergedVx;
-    cell1.vy = mergedVy;
-    cell1.mergeTime = null; // Clear merge timer
+    // New velocity = ZERO (cancel all velocities)
+    const newVelocityX = 0;
+    const newVelocityY = 0;
 
-    // Remove cell2
+    // Delete children immediately
     this.removeCell(cell2.id);
+    
+    // Update cell1 with merged values (physics snap - no lerping)
+    cell1.mass = newMass;
+    cell1.x = newPosX;
+    cell1.y = newPosY;
+    cell1.vx = newVelocityX;
+    cell1.vy = newVelocityY;
+    cell1.mergeTime = null;
+    cell1.mergeTargetId = null;
+    cell1.mergeStartTime = null;
+    cell1.setState(CellState.IDLE);
+    
+    // Animation is cosmetic only - logic state is instant
+  }
+
+  instantMergeCells(cell1, cell2) {
+    // Alias for completeMerge (instant merge mode)
+    this.completeMerge(cell1, cell2);
   }
 
   mergeCells(cell1, cell2) {
-    // Classic merge (same as instant but with delay)
-    this.instantMergeCells(cell1, cell2);
+    // Alias for completeMerge
+    this.completeMerge(cell1, cell2);
   }
 
   tick(world) {
@@ -801,8 +820,19 @@ export class Player {
       const cursorDx = this.cursorX - cell.x;
       const cursorDy = this.cursorY - cell.y;
       const cursorDist = Math.sqrt(cursorDx * cursorDx + cursorDy * cursorDy);
+      const cellRadius = cell.getRadius();
       
-      if (cursorDist > 0 && cursorDist < avgRadius * 3.0) {
+      // Check if cursor is centered (very close to cell center) - if so, apply heavy damping instead
+      const isCursorCenteredOnCell = cursorDist < cellRadius * 0.4;
+      
+      if (isCursorCenteredOnCell) {
+        // Cursor is centered: apply very heavy damping to slow/stop the cell (prevents shake)
+        const dampingFactor = 0.75; // Very heavy damping - almost stops the cell
+        cell.vx *= dampingFactor;
+        cell.vy *= dampingFactor;
+        // Don't apply cursor attraction when centered - prevents jitter
+        // Skip all cursor attraction logic when centered
+      } else if (cursorDist > 0 && cursorDist < avgRadius * 3.0) {
         // Normalize direction toward cursor
         const dirToCursorX = cursorDx / cursorDist;
         const dirToCursorY = cursorDy / cursorDist;
@@ -810,8 +840,8 @@ export class Player {
         // Stronger attraction when cursor is closer (skill-based: better cursor placement = faster merges)
         let attractionStrength;
         if (cursorDist < avgRadius * 0.8) {
-          // Cursor very close/centered: very strong attraction for quick merges
-          attractionStrength = 0.8; // Very strong - cells converge quickly
+          // Cursor very close: moderate attraction (reduced from 0.8 to prevent shake)
+          attractionStrength = 0.4; // Reduced to prevent shake when near center
         } else if (cursorDist < avgRadius * 1.5) {
           // Cursor close: strong attraction
           attractionStrength = 0.5;
@@ -834,7 +864,8 @@ export class Player {
       }
       
       // If cursor is centered, add additional attraction force toward center to bring cells together
-      if (isCursorCentered && this.cells.length > 1) {
+      // BUT only if cursor is NOT centered on this specific cell (prevents shake)
+      if (isCursorCentered && this.cells.length > 1 && !isCursorCenteredOnCell) {
         const cellToCenterDx = centerX - cell.x;
         const cellToCenterDy = centerY - cell.y;
         const cellToCenterDist = Math.sqrt(cellToCenterDx * cellToCenterDx + cellToCenterDy * cellToCenterDy);
@@ -870,4 +901,3 @@ export class Player {
     };
   }
 }
-

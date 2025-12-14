@@ -1,8 +1,9 @@
-import { Cell } from './entities/Cell.js';
+import { Cell, CellState } from './entities/Cell.js';
 import { Pellet } from './entities/Pellet.js';
 import { Virus } from './entities/Virus.js';
 import { Player } from './entities/Player.js';
 import { Bot } from './entities/Bot.js';
+import { PhysicsConstants } from './PhysicsConstants.js';
 
 export class GameWorld {
   constructor() {
@@ -205,28 +206,185 @@ export class GameWorld {
   }
 
   tick() {
-    // Update all players
+    // CRITICAL: Process in correct priority order
+    
+    // 1. Movement integration
     this.players.forEach((player) => {
       player.tick(this);
     });
 
-    // Update viruses
+    // 2. Split travel decay (update split immunity timers)
+    this.players.forEach((player) => {
+      player.cells.forEach((cell) => {
+        // Split travel state is managed in Cell.updateMovement
+      });
+    });
+
+    // 3. Collision resolution (push-out for same-player cells)
+    this.resolveCollisions();
+
+    // 4. Eating resolution (largest first)
+    this.resolveEating();
+
+    // 5. Merge checks
+    this.players.forEach((player) => {
+      player.checkMerges(this.config);
+    });
+
+    // 6. Update other entities
     this.viruses.forEach((virus) => {
       virus.update();
     });
-
-    // Update feed pellets
     this.updateFeedPellets();
-
-    // Update virus projectiles
     this.updateVirusProjectiles();
 
-    // Check collisions
-    this.checkCollisions();
+    // 7. Check other collisions (pellets, viruses, etc.)
+    this.checkOtherCollisions();
 
-    // Maintain pellet/virus counts
+    // 8. Maintain pellet/virus counts
     this.maintainWorld();
   }
+  
+  resolveCollisions() {
+    // OVERLAP RESOLUTION (push-out only) - NEVER cancels eat checks
+    // This only pushes cells apart physically, does not affect eating logic
+    this.players.forEach((player) => {
+      const cells = player.cells;
+      for (let i = 0; i < cells.length; i++) {
+        for (let j = i + 1; j < cells.length; j++) {
+          const cell1 = cells[i];
+          const cell2 = cells[j];
+          
+          // Skip if either cell has split immunity (they can overlap during split travel)
+          if (cell1.hasSplitImmunity() || cell2.hasSplitImmunity()) {
+            continue;
+          }
+          
+          // Skip if cells are not alive
+          if (!cell1.isAlive || !cell2.isAlive) {
+            continue;
+          }
+          
+          const dx = cell1.x - cell2.x;
+          const dy = cell1.y - cell2.y;
+          const distSq = dx * dx + dy * dy;
+          
+          if (distSq === 0) continue; // Same position
+          
+          const r1 = cell1.getRadius();
+          const r2 = cell2.getRadius();
+          const minDist = r1 + r2;
+          
+          if (distSq < minDist * minDist) {
+            // Cells are overlapping - push them apart
+            const dist = Math.sqrt(distSq);
+            const overlap = minDist - dist;
+            if (overlap > 0) {
+              // Push-out formula: normalize(A.pos - B.pos) * overlap * 0.5
+              const pushX = (dx / dist) * overlap * 0.5;
+              const pushY = (dy / dist) * overlap * 0.5;
+              
+              // Apply push-out (weighted by mass - heavier pushes less)
+              const totalMass = cell1.mass + cell2.mass;
+              const pushRatio1 = cell2.mass / totalMass;
+              const pushRatio2 = cell1.mass / totalMass;
+              
+              cell1.x += pushX * pushRatio1;
+              cell1.y += pushY * pushRatio1;
+              cell2.x -= pushX * pushRatio2;
+              cell2.y -= pushY * pushRatio2;
+            }
+          }
+        }
+      }
+    });
+  }
+  
+  resolveEating() {
+    // EATING IS A MANUAL DOMINANCE CHECK - NOT A COLLISION CALLBACK
+    // Collect all cells from all players and bots
+    const allCells = [];
+    this.players.forEach((player) => {
+      player.cells.forEach((cell) => {
+        if (cell.isAlive) { // Only check alive cells
+          allCells.push({ cell, player, isBot: player.isBot || false });
+        }
+      });
+    });
+    
+    // Track cells that have been eaten (to avoid double-eating)
+    const eatenCellIds = new Set();
+    
+    // Check each cell against all other cells
+    for (let i = 0; i < allCells.length; i++) {
+      const eater = allCells[i];
+      if (eatenCellIds.has(eater.cell.id)) continue; // Already eaten
+      if (!eater.cell.isAlive) continue; // Not alive
+      
+      // Get base radius (sqrt(mass)) for eating calculations
+      const eaterBaseRadius = eater.cell.getBaseRadius();
+      const eaterX = eater.cell.x;
+      const eaterY = eater.cell.y;
+      const eaterMass = eater.cell.mass;
+      
+      // Find all potential victims (sort by distance ASC - eat closest first)
+      const potentialVictims = [];
+      
+      for (let j = 0; j < allCells.length; j++) {
+        if (i === j) continue;
+        const target = allCells[j];
+        if (eatenCellIds.has(target.cell.id)) continue; // Already eaten
+        if (!target.cell.isAlive) continue; // Not alive
+        if (eater.player.id === target.player.id) continue; // Same owner - can't eat own cells
+        
+        const targetBaseRadius = target.cell.getBaseRadius();
+        const targetMass = target.cell.mass;
+        
+        // Calculate distance
+        const dx = eaterX - target.cell.x;
+        const dy = eaterY - target.cell.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // EATING CONDITIONS (ALL must be true):
+        // A.owner !== B.owner ✓ (checked above)
+        // A.mass > B.mass
+        if (eaterMass <= targetMass) continue;
+        
+        // A.radius >= B.radius * 1.15
+        if (eaterBaseRadius < targetBaseRadius * PhysicsConstants.EAT_RADIUS_RATIO) continue;
+        
+        // distance < A.radius - (B.radius * 0.4)
+        const eatDistance = eaterBaseRadius - (targetBaseRadius * PhysicsConstants.EAT_DISTANCE_FACTOR);
+        if (distance >= eatDistance) continue;
+        
+        // B.isAlive === true ✓ (checked above)
+        // B.splitImmunityTimer <= 0
+        if (target.cell.getSplitImmunityTimer() > 0) continue;
+        
+        // All conditions met - add to potential victims
+        potentialVictims.push({ target, distance });
+      }
+      
+      // MULTI-EAT PRIORITY: Sort by distance ASC, eat only ONE per frame
+      if (potentialVictims.length > 0) {
+        potentialVictims.sort((a, b) => a.distance - b.distance);
+        const victim = potentialVictims[0].target;
+        
+        // EAT: Transfer 100% mass instantly (NO DELAY)
+        eater.cell.mass += victim.cell.mass;
+        
+        // Mark target as dead and remove immediately
+        victim.cell.isAlive = false;
+        victim.player.removeCell(victim.cell.id);
+        eatenCellIds.add(victim.cell.id);
+        
+        // Cancel velocities on eater (smooth stop after eating)
+        eater.cell.vx = 0;
+        eater.cell.vy = 0;
+      }
+    }
+  }
+  
 
   updateFeedPellets() {
     const now = Date.now();
@@ -264,7 +422,7 @@ export class GameWorld {
     });
   }
 
-  checkCollisions() {
+  checkOtherCollisions() {
     // Player vs Pellets (optimized with early distance check)
     this.players.forEach((player) => {
       player.cells.forEach((cell) => {
@@ -308,47 +466,17 @@ export class GameWorld {
       });
     });
 
-    // Player vs Player (optimized with early distance check)
-    this.players.forEach((player1) => {
-      player1.cells.forEach((cell1) => {
-        const cell1Radius = cell1.getRadius();
-        const cell1X = cell1.x;
-        const cell1Y = cell1.y;
-        
-        this.players.forEach((player2) => {
-          if (player1.id === player2.id) return;
-          
-          player2.cells.forEach((cell2) => {
-            // Early exit: check distance first before expensive collision check
-            const dx = cell1X - cell2.x;
-            const dy = cell1Y - cell2.y;
-            const distSq = dx * dx + dy * dy;
-            const maxDist = cell1Radius + cell2.getRadius();
-            
-            // Skip if too far away
-            if (distSq > maxDist * maxDist) return;
-            
-            if (this.isColliding(cell1, cell2)) {
-              // Need to be 25% larger to eat (Agar.io rule)
-              if (cell1.mass > cell2.mass * 1.25) {
-                // cell1 eats cell2 - only gain 85% of mass (15% loss for slower growth)
-                cell1.mass += cell2.mass * 0.85;
-                player2.removeCell(cell2.id);
-                
-                // If player has no cells left, they need to manually respawn
-                if (player2.cells.length === 0) {
-                  // Player is dead, but don't auto-respawn
-                }
-              }
-            }
-          });
-        });
-      });
-    });
+    // Player vs Player collisions (pellets, viruses, etc.)
+    // Eating is now handled in resolveEating() with proper priority
 
     // Player vs Viruses (optimized with early distance check)
     this.players.forEach((player) => {
       player.cells.forEach((cell) => {
+        // Skip if cell has split immunity
+        if (cell.hasSplitImmunity()) {
+          return;
+        }
+        
         const cellRadius = cell.getRadius();
         const cellX = cell.x;
         const cellY = cell.y;
@@ -368,6 +496,10 @@ export class GameWorld {
           if (distSq > maxDist * maxDist) return;
           
           if (this.isColliding(cell, virus)) {
+            // Only trigger if cell mass is above threshold
+            if (cell.mass < PhysicsConstants.VIRUS_MASS_THRESHOLD) {
+              return; // Cell too small to trigger virus split
+            }
             // Virus causes clean burst split - no mass gain, just split the cell
             // Calculate split direction: radial burst from virus collision point
             const dx = cell.x - virus.x;
@@ -390,9 +522,9 @@ export class GameWorld {
             player.removeCell(cellId);
             
             // Calculate how many pieces we can create (based on mass)
-            const minCellMass = 200;
+            const minCellMass = PhysicsConstants.MIN_MASS;
             const maxPieces = Math.floor(totalMass / minCellMass);
-            const pieceCount = Math.min(16, maxPieces, player.getMaxCells() - player.cells.length);
+            const pieceCount = Math.min(PhysicsConstants.VIRUS_SPLIT_MAX_PIECES, maxPieces, player.getMaxCells() - player.cells.length);
             
             if (pieceCount >= 2) {
               // Create pieces in a circle around the virus collision point
@@ -422,11 +554,13 @@ export class GameWorld {
                 // Apply clean radial burst impulse (no speed boost, just clean separation)
                 const radialDirX = Math.cos(angle);
                 const radialDirY = Math.sin(angle);
-                const impulseSpeed = 12.0; // Clean burst impulse for virus split
+                const impulseSpeed = PhysicsConstants.VIRUS_SPLIT_IMPULSE;
                 newCell.vx = radialDirX * impulseSpeed + cellVx * 0.2; // Minimal original velocity
                 newCell.vy = radialDirY * impulseSpeed + cellVy * 0.2;
                 newCell.setInstantMerge(player.config.instantMerge);
+                newCell.setState(CellState.SPLIT_TRAVEL);
                 newCell.splitTime = Date.now();
+                newCell.splitImmunityUntil = Date.now() + PhysicsConstants.SPLIT_IMMUNITY_DURATION;
                 newCell.splitDirectionX = radialDirX;
                 newCell.splitDirectionY = radialDirY;
                 
@@ -521,10 +655,7 @@ export class GameWorld {
       });
     });
 
-    // Merge cells (same player)
-    this.players.forEach((player) => {
-      player.checkMerges(this.config);
-    });
+    // Note: Merges are handled in tick() method with proper priority order
   }
 
   isColliding(entity1, entity2) {

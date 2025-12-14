@@ -49,6 +49,9 @@ export class GameClient {
     // Session
     this.isPlaying = false;
     this.playerName = null;
+    
+    // Debug
+    this.debugMode = false;
 
     // Minimap
     this.minimapCanvas = document.getElementById('minimap');
@@ -224,6 +227,12 @@ export class GameClient {
     if (!isDown) return;
 
     const keybinds = this.keybindManager;
+
+    // Debug mode toggle (F3)
+    if (event.key === 'F3' || event.code === 'F3') {
+      this.toggleDebugMode();
+      return;
+    }
 
     if (keybinds.isPressed('split', event)) {
       this.sendAction('split');
@@ -469,6 +478,59 @@ export class GameClient {
     const previousCellCount = player.data.cells ? player.data.cells.length : 0;
     player.data = playerData;
 
+    // Get existing cell IDs to track what was removed
+    const existingCellIds = new Set();
+    playerData.cells.forEach((cellData) => {
+      existingCellIds.add(cellData.id);
+    });
+    
+    // IMMEDIATELY remove cells that are not in new data (eaten or merged)
+    // This ensures eaten cells disappear instantly from UI
+    for (let i = player.container.children.length - 1; i >= 0; i--) {
+      const cellGraphics = player.container.children[i];
+      const cellData = cellGraphics.children[0]?.cellData;
+      
+      if (!cellData || !existingCellIds.has(cellData.id)) {
+        // Cell was eaten or merged - remove immediately
+        // Only animate merge if it's a merge (not an eat)
+        const isMerge = playerData.cells.length > 0 && 
+                       playerData.cells.some(c => c.mass > (cellData?.mass || 0) * 1.5);
+        
+        if (isMerge && playerData.cells.length > 0) {
+          // It's a merge - animate it
+          let targetCellData = playerData.cells.reduce((largest, cell) => 
+            cell.mass > largest.mass ? cell : largest, playerData.cells[0]);
+          
+          if (!cellGraphics.mergeAnimation && targetCellData) {
+            cellGraphics.mergeAnimation = {
+              startTime: Date.now(),
+              startScale: cellGraphics.scale.x,
+              startAlpha: cellGraphics.alpha,
+              startX: cellGraphics.x,
+              startY: cellGraphics.y,
+              targetCell: targetCellData,
+              startMass: cellData?.mass || 0
+            };
+            cellGraphics.cellData = cellData;
+            cellGraphics.wasMerging = true; // Mark as merging to prevent interpolation shake
+            
+            // Store for animation
+            if (!player.mergeAnimations) player.mergeAnimations = [];
+            if (!player.mergeAnimations.includes(cellGraphics)) {
+              player.mergeAnimations.push(cellGraphics);
+            }
+          }
+          // Don't remove yet - keep for merge animation
+        } else {
+          // It's an eat - remove immediately (no animation)
+          if (cellGraphics.parent) {
+            cellGraphics.parent.removeChild(cellGraphics);
+          }
+          cellGraphics.destroy();
+        }
+      }
+    }
+
     // Update cells with smooth transitions
     const existingCells = player.container.children;
     const isLocal = playerData.id === this.playerId;
@@ -476,77 +538,20 @@ export class GameClient {
       let cellGraphics;
       const isNewCell = index >= existingCells.length;
       if (isNewCell) {
-        // New cell created (split) - animate in with smooth scale
+        // New cell created (split) - NO SHAKE: start at full scale
         cellGraphics = this.createCellGraphics(cellData, isLocal, playerData.name, playerData.color);
         // Set initial position immediately to prevent interpolation from wrong position
         cellGraphics.x = cellData.x;
         cellGraphics.y = cellData.y;
-        cellGraphics.scale.set(0); // Start at 0 scale for animation
-        cellGraphics.animationTime = 0; // Animation timer
+        cellGraphics.scale.set(1.0); // Start at full scale - NO SHAKE
         cellGraphics.alpha = 1.0; // Start fully visible
+        // No animation timer - cells appear instantly without shake
         player.container.addChild(cellGraphics);
       } else {
         cellGraphics = existingCells[index];
-        // Ensure smooth transitions for existing cells
-        if (cellGraphics.animationTime === undefined) {
-          cellGraphics.animationTime = undefined; // Not animating
-        }
       }
       this.updateCellGraphics(cellGraphics, cellData, isLocal, playerData.name, playerData.color);
     });
-
-    // Handle cell removal (merges) with smooth animation
-    // Track which cells are being merged (removed)
-    const cellsToRemove = [];
-    
-    // Find cells that are being removed (merged) - cells that exist in container but not in new data
-    const existingCellIds = new Set();
-    playerData.cells.forEach((cellData) => {
-      existingCellIds.add(cellData.id);
-    });
-    
-    // Find cells to remove (not in new data)
-    for (let i = player.container.children.length - 1; i >= 0; i--) {
-      const cellGraphics = player.container.children[i];
-      const cellData = cellGraphics.children[0]?.cellData;
-      
-      if (!cellData || !existingCellIds.has(cellData.id)) {
-        // This cell is being merged - find the target cell (largest remaining cell)
-        let targetCellData = null;
-        if (playerData.cells.length > 0) {
-          // Find largest remaining cell as merge target
-          targetCellData = playerData.cells.reduce((largest, cell) => 
-            cell.mass > largest.mass ? cell : largest, playerData.cells[0]);
-        }
-        
-        // Mark for smooth merge animation
-        if (!cellGraphics.mergeAnimation && targetCellData) {
-          cellGraphics.mergeAnimation = {
-            startTime: Date.now(),
-            startScale: cellGraphics.scale.x,
-            startAlpha: cellGraphics.alpha,
-            startX: cellGraphics.x,
-            startY: cellGraphics.y,
-            targetCell: targetCellData,
-            startMass: cellData?.mass || 0
-          };
-          // Store cell data reference for animation
-          cellGraphics.cellData = cellData;
-        }
-        cellsToRemove.push(cellGraphics);
-        // Don't remove yet - keep for animation
-      }
-    }
-    
-    // Store merge animations for smooth rendering
-    if (cellsToRemove.length > 0) {
-      if (!player.mergeAnimations) player.mergeAnimations = [];
-      cellsToRemove.forEach(cell => {
-        if (cell.mergeAnimation && !player.mergeAnimations.includes(cell)) {
-          player.mergeAnimations.push(cell);
-        }
-      });
-    }
 
     // Update stats for local player
     if (playerData.id === this.playerId) {
@@ -615,8 +620,8 @@ export class GameClient {
     container.addChild(nameText);
     
     // Create text for cell mass (below name, crisp rendering, properly centered)
-    // Scale text size with cell radius - better scaling for larger cells
-    const massFontSize = Math.max(10, Math.min(radius * 0.45, radius * 0.3 + 15)); // Better scaling that grows with cell size
+    // Scale text size with cell radius - smaller text size
+    const massFontSize = Math.max(8, Math.min(radius * 0.3, radius * 0.2 + 10)); // Smaller text size
     const massText = new PIXI.Text(Math.floor(cellData.mass).toString(), {
       fontFamily: '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif',
       fontSize: massFontSize,
@@ -699,7 +704,7 @@ export class GameClient {
     // Update mass text - scale with cell size
     if (massText) {
       massText.text = Math.floor(cellData.mass).toString();
-      const massFontSize = Math.max(10, Math.min(radius * 0.45, radius * 0.3 + 15)); // Better scaling that grows with cell size
+      const massFontSize = Math.max(8, Math.min(radius * 0.3, radius * 0.2 + 10)); // Smaller text size
       massText.style.fontSize = massFontSize;
       massText.style.fontFamily = '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
       massText.style.fontWeight = '600';
@@ -1235,9 +1240,132 @@ export class GameClient {
     this.updateFeedParticles(deltaNormalized);
     this.renderVirusProjectiles();
     this.renderMinimap();
+    
+    // Render debug overlays if enabled
+    if (this.debugMode) {
+      this.renderDebugOverlays();
+    }
 
     // Update leaderboard
     this.updateLeaderboard();
+  }
+  
+  renderDebugOverlays() {
+    // Create or get debug layer
+    if (!this.debugLayer) {
+      this.debugLayer = new PIXI.Container();
+      this.gameLayer.addChild(this.debugLayer);
+    }
+    
+    // Clear previous debug graphics
+    this.debugLayer.removeChildren();
+    
+    // Render debug information for cells
+    this.players.forEach((player, playerId) => {
+      const isLocal = playerId === this.playerId;
+      if (!isLocal) return; // Only show debug for local player
+      
+      player.data.cells.forEach((cellData, index) => {
+        const cellGraphics = player.container.children[index];
+        if (!cellGraphics) return;
+        
+        const radius = this.massToRadius(cellData.mass);
+        const state = cellData.state || 'IDLE';
+        
+        // Create debug graphics container
+        const debugGraphics = new PIXI.Graphics();
+        
+        // Draw collision radius (red)
+        debugGraphics.lineStyle(1, 0xff0000, 0.5);
+        debugGraphics.drawCircle(0, 0, radius);
+        
+        // Draw eat threshold ring (cyan) - shows when this cell can eat others
+        // Eat distance: baseRadius(A) - baseRadius(B) * 0.4
+        // For visualization, show eat range for a typical small cell (200 mass)
+        const smallCellMass = 200;
+        const smallCellBaseRadius = Math.sqrt(smallCellMass / Math.PI);
+        const cellBaseRadius = Math.sqrt(cellData.mass / Math.PI);
+        const eatDistance = cellBaseRadius - (smallCellBaseRadius * 0.4);
+        if (eatDistance > 0) {
+          debugGraphics.lineStyle(2, 0x00ffff, 0.7);
+          debugGraphics.drawCircle(0, 0, eatDistance);
+        }
+        
+        // Draw merge threshold (yellow, if merging)
+        if (state === 'MERGING' || state === 'MERGE_READY') {
+          debugGraphics.lineStyle(1, 0xffff00, 0.5);
+          debugGraphics.drawCircle(0, 0, radius * 1.1);
+        }
+        
+        // Draw split immunity timer (purple, if in split travel)
+        if (state === 'SPLIT_TRAVEL') {
+          const splitTime = cellData.splitTime || 0;
+          const now = Date.now();
+          const timeSinceSplit = now - splitTime;
+          const immunityDuration = 500; // SPLIT_IMMUNITY_DURATION
+          const remaining = Math.max(0, immunityDuration - timeSinceSplit);
+          const alpha = remaining / immunityDuration;
+          debugGraphics.lineStyle(2, 0xff00ff, alpha);
+          debugGraphics.drawCircle(0, 0, radius * 1.05);
+          
+          // Show split immunity timer text
+          const timerText = new PIXI.Text(`${Math.round(remaining)}ms`, {
+            fontFamily: 'Arial',
+            fontSize: 10,
+            fill: 0xff00ff,
+            align: 'center',
+            stroke: 0x000000,
+            strokeThickness: 1
+          });
+          timerText.anchor.set(0.5, 0.5);
+          timerText.x = cellGraphics.x;
+          timerText.y = cellGraphics.y + radius + 15;
+          this.debugLayer.addChild(timerText);
+        }
+        
+        // Draw merge radius ring (yellow, if merging)
+        if (state === 'MERGING' || state === 'MERGE_READY') {
+          debugGraphics.lineStyle(1, 0xffff00, 0.5);
+          const mergeRadius = radius * 1.1; // Merge threshold
+          debugGraphics.drawCircle(0, 0, mergeRadius);
+        }
+        
+        // Draw velocity vector (green)
+        const vx = cellData.vx || 0;
+        const vy = cellData.vy || 0;
+        const velLength = Math.sqrt(vx * vx + vy * vy);
+        if (velLength > 0.1) {
+          const velScale = 10; // Scale factor for visibility
+          debugGraphics.lineStyle(2, 0x00ff00, 0.8);
+          debugGraphics.moveTo(0, 0);
+          debugGraphics.lineTo(vx * velScale, vy * velScale);
+        }
+        
+        // Position debug graphics at cell position
+        debugGraphics.x = cellGraphics.x;
+        debugGraphics.y = cellGraphics.y;
+        this.debugLayer.addChild(debugGraphics);
+        
+        // Draw state label
+        const stateText = new PIXI.Text(state, {
+          fontFamily: 'Arial',
+          fontSize: 12,
+          fill: 0xffffff,
+          align: 'center',
+          stroke: 0x000000,
+          strokeThickness: 2
+        });
+        stateText.anchor.set(0.5, 0.5);
+        stateText.x = cellGraphics.x;
+        stateText.y = cellGraphics.y - radius - 20;
+        this.debugLayer.addChild(stateText);
+      });
+    });
+  }
+  
+  toggleDebugMode() {
+    this.debugMode = !this.debugMode;
+    console.log('Debug mode:', this.debugMode ? 'ON' : 'OFF');
   }
 
   renderMinimap() {
@@ -1331,7 +1459,7 @@ export class GameClient {
           }
           
           const elapsed = now - anim.startTime;
-          const duration = 350; // 350ms merge animation (longer for smoother effect)
+          const duration = 250; // 250ms merge animation (faster, more subtle)
           const progress = Math.min(1, elapsed / duration);
           
           if (progress >= 1) {
@@ -1342,60 +1470,18 @@ export class GameClient {
             mergingCell.destroy();
             player.mergeAnimations.splice(i, 1);
           } else {
-            // Smooth merge animation: cells actually merge into each other
-            // Use smoother ease-in-out curve for more natural merging
-            const easeInOut = progress < 0.5 
-              ? 4 * progress * progress * progress 
-              : 1 - Math.pow(-2 * progress + 2, 4) / 2;
+            // NO MOVEMENT during merge animation - just fade out to prevent shake
+            // Keep merging cell at start position (no movement = no shake)
+            mergingCell.x = anim.startX;
+            mergingCell.y = anim.startY;
             
-            if (anim.targetCell) {
-              // Calculate target position (center of target cell)
-              const targetX = anim.targetCell.x;
-              const targetY = anim.targetCell.y;
-              
-              // Move merging cell toward target (converge completely with smooth curve)
-              const dx = targetX - anim.startX;
-              const dy = targetY - anim.startY;
-              mergingCell.x = anim.startX + dx * easeInOut;
-              mergingCell.y = anim.startY + dy * easeInOut;
-              
-              // Scale merging cell down smoothly as it gets absorbed into target
-              // Use smoother curve - starts slow, accelerates, then slows at end
-              const scaleDown = 1 - easeInOut * 0.75; // Shrink to 25% as it merges
-              mergingCell.scale.set(anim.startScale * scaleDown);
-              
-              // Fade out smoothly as it merges (becomes part of target)
-              // Fade more gradually for cleaner look
-              const fadeProgress = easeInOut;
-              mergingCell.alpha = anim.startAlpha * (1 - fadeProgress * 0.95); // Fade to 5% opacity
-              
-              // Find the target cell graphics to scale up as it absorbs
-              const targetCellGraphics = Array.from(player.container.children).find(child => {
-                if (child === mergingCell || child.mergeAnimation) return false; // Skip merging cells
-                const childData = child.children[0]?.cellData;
-                if (!childData) return false;
-                // Match by ID or by position (within 10px tolerance for smoother matching)
-                return childData.id === anim.targetCell.id || 
-                       (Math.abs(childData.x - anim.targetCell.x) < 10 && 
-                        Math.abs(childData.y - anim.targetCell.y) < 10);
-              });
-              
-              if (targetCellGraphics) {
-                // Scale target cell up smoothly as it absorbs the merging cell (visual feedback)
-                // Use smoother curve that starts slow and accelerates
-                const targetScaleIncrease = easeInOut * 0.10; // Grow by 10% as it absorbs (smoother)
-                const baseScale = 1.0;
-                // Smoothly interpolate the scale increase
-                const currentScale = targetCellGraphics.scale.x || baseScale;
-                const targetScale = baseScale + targetScaleIncrease;
-                targetCellGraphics.scale.set(currentScale + (targetScale - currentScale) * 0.3);
-              }
-            } else {
-              // No target cell, just fade and shrink smoothly
-              const easeOut = 1 - Math.pow(1 - progress, 3); // Smoother cubic ease-out
-              mergingCell.scale.set(anim.startScale * (1 - easeOut * 0.65));
-              mergingCell.alpha = anim.startAlpha * (1 - easeOut);
-            }
+            // Use simple ease-out for smooth fade
+            const easeOut = 1 - Math.pow(1 - progress, 2);
+            
+            // Just fade out - no movement, no scale change (prevents shake)
+            mergingCell.alpha = anim.startAlpha * (1 - easeOut);
+            
+            // No scale changes on target cell during merge (prevents shake)
           }
         }
       }
@@ -1412,58 +1498,71 @@ export class GameClient {
           const distance = Math.sqrt(dx * dx + dy * dy);
           
           // Check if this is a recently split cell (should have smooth travel time)
-          const isNewCell = cellGraphics.animationTime !== undefined;
+          const isNewCell = false; // No spawn animation - cells appear instantly
+          const cellState = cellData.state || 'IDLE';
+          const isInSplitTravel = cellState === 'SPLIT_TRAVEL';
+          const isMerging = cellState === 'MERGING' || cellState === 'MERGE_READY';
           const cellDataTime = cellData.splitTime || 0;
           const now = Date.now();
           const timeSinceSplit = now - cellDataTime;
-          const isRecentlySplit = timeSinceSplit < 600; // Consider split for 600ms after split (shorter for smoother feel)
+          const isRecentlySplit = isInSplitTravel || (timeSinceSplit < 600 && cellDataTime > 0);
           
-          // For split cells, use slower interpolation to allow smooth travel time
-          // For normal cells, use faster interpolation for responsive movement
-          let alpha;
-          if (isNewCell || isRecentlySplit) {
-            // Recently split cells: slower interpolation for smooth travel (better attack timing)
-            alpha = 0.28; // Even slower interpolation - smoother, less clunky travel
+          // CRITICAL: If cell just merged (large position jump), snap immediately to prevent shake
+          const wasMerging = cellGraphics.wasMerging || false;
+          const justMerged = wasMerging && !isMerging;
+          const largePositionChange = distance > 50; // Large position change indicates merge
+          
+          // Track merge state
+          cellGraphics.wasMerging = isMerging;
+          
+          // If just merged or large position change, snap immediately (NO INTERPOLATION)
+          if (justMerged || largePositionChange) {
+            cellGraphics.x = targetX;
+            cellGraphics.y = targetY;
+            // Clear any interpolation state
+            cellGraphics.lastX = targetX;
+            cellGraphics.lastY = targetY;
           } else {
-            // Normal cells: faster interpolation for responsive movement
-            alpha = isLocal ? 0.85 : 0.65;
-          }
-          const frameAlpha = 1 - Math.pow(1 - alpha, deltaNormalized);
-          
-          // Apply smooth easing for very small movements (prevents jitter)
-          let interpolationFactor = frameAlpha;
-          if (distance < 0.5) {
-            // For very small movements, snap immediately to prevent jitter
-            interpolationFactor = 1.0;
-          } else if (distance < 2) {
-            // For small movements, use linear interpolation
-            interpolationFactor = Math.min(1, distance * 0.5);
-          } else if (isRecentlySplit && distance > 15) {
-            // For split cells with large distance, use even slower interpolation for smooth travel
-            interpolationFactor = Math.min(1, frameAlpha * 0.5); // 50% slower for smoother split travel
-          }
-          
-          // Ultra-smooth position interpolation
-          cellGraphics.x += dx * interpolationFactor;
-          cellGraphics.y += dy * interpolationFactor;
-          
-          // Smooth scale animation for new cells (split animation) - slower and smoother
-          if (cellGraphics.animationTime !== undefined) {
-            cellGraphics.animationTime += deltaNormalized * 0.08; // Even slower animation (was 0.12) for smoother feel
-            if (cellGraphics.animationTime < 1.0) {
-              // Smooth ease-out animation - slower for smoother split animation
-              const t = cellGraphics.animationTime;
-              // Use smoother ease-out curve for less clunky feel
-              const easeOut = t < 1 ? 1 - Math.pow(1 - t, 4) : 1; // Even smoother quartic easing
-              const currentScale = easeOut; // Scale from 0 to 1
-              cellGraphics.scale.set(currentScale);
+            // For split cells, use smoother interpolation with easing for less direct feel
+            // For normal cells, use faster interpolation for responsive movement
+            let alpha;
+            if (isNewCell || isRecentlySplit) {
+              // Recently split cells: much smoother interpolation with easing
+              alpha = 0.15; // Slower interpolation for smoother, less direct travel
             } else {
-              // Animation complete
-              cellGraphics.scale.set(1.0);
-              cellGraphics.animationTime = undefined;
+              // Normal cells: faster interpolation for responsive movement
+              alpha = isLocal ? 0.85 : 0.65;
             }
-          } else if (cellGraphics.scale.x !== 1.0) {
-            // Ensure scale is 1.0 if not animating
+            const frameAlpha = 1 - Math.pow(1 - alpha, deltaNormalized);
+            
+            // Apply smooth easing for split cells to make them feel less direct
+            let interpolationFactor = frameAlpha;
+            if (distance < 1.0) {
+              // For very small movements, snap immediately to prevent jitter/shake
+              interpolationFactor = 1.0;
+            } else if (distance < 3) {
+              // For small movements, use linear interpolation with higher factor
+              interpolationFactor = Math.min(1, distance * 0.6);
+            } else if (isRecentlySplit) {
+              // For split cells: apply smooth easing curve to make travel feel smoother
+              // Use ease-out curve for natural deceleration feel
+              const normalizedDistance = Math.min(1, distance / 50); // Normalize to 50px max
+              const easeOut = 1 - Math.pow(1 - normalizedDistance, 3); // Cubic ease-out
+              interpolationFactor = Math.min(1, frameAlpha * (0.3 + easeOut * 0.4)); // 30-70% interpolation with easing
+            }
+            
+            // Ultra-smooth position interpolation
+            cellGraphics.x += dx * interpolationFactor;
+            cellGraphics.y += dy * interpolationFactor;
+          }
+          
+          // Store cell state for debug rendering
+          cellGraphics.cellState = cellState;
+          cellGraphics.cellData = cellData;
+          
+          // No spawn animation - cells appear at full scale to prevent shake
+          // Ensure scale is always 1.0 (no animation)
+          if (cellGraphics.scale.x !== 1.0) {
             cellGraphics.scale.set(1.0);
           }
         }
